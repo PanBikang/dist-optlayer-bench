@@ -330,7 +330,7 @@ def main(config_dict):
             local_weights.append(copy.deepcopy(w))
             local_losses.append(copy.deepcopy(loss))
         
-        # TODO: sth to add
+        # TO
         global_weights = average_weights(local_weights)
         global_net.load_state_dict(global_weights)
         loss_avg = sum(local_losses) / len(local_losses)
