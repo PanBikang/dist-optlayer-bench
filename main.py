@@ -9,12 +9,12 @@ import shutil
 import argparse
 import setproctitle
 
-from dist_train import FedDistManager
+from dist_train import FedDistManager, DecenDistManager
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     # default_config_path = os.path.join("old_config", 'mnist_config', "lenet-mnist")
-    parser.add_argument('--config', type=str, default='fc-cifar10-adam')
+    parser.add_argument('--config', type=str, default='decen-fc-cifar10-adam')
     parser.add_argument("--save_dir", type=str, default='lenet_basic_test')
     args = parser.parse_args()
     
@@ -65,6 +65,6 @@ if __name__=='__main__':
     except:
         print("Unexpected error:", sys.exc_info())
     new_config_dict = {'config_dict': config_dict}
-    exp_env = FedDistManager(config_dict['save'])
+    exp_env = DecenDistManager(config_dict['save'])
     exp_env.run_exp(config_dict)
     
