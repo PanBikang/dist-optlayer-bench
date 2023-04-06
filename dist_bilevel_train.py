@@ -166,7 +166,7 @@ class FedDistManager(DistManager):
             except:
                 pass
         # os.system('./plot.py "{}" &'.format(config_dict['save']))
-        
+
         self.trainF.close()
         self.valF.close()
         self.testF.close()
@@ -268,7 +268,7 @@ class FedDistManager(DistManager):
             total += len(labels)
 
         accuracy = correct / total
-        return accuracy, loss / total
+        return accuracy, loss
     
     def get_dataset(self):
         from sampling import mnist_iid, mnist_noniid, mnist_noniid_unequal
@@ -717,7 +717,7 @@ class BilevelFedDistManager(FedDistManager):
         super().__init__(save_path)
         
     def run_exp(self, config_dict) -> None:
-        self.config_dict = config_dict
+        super().run_exp(config_dict)
         
         # record the training information
         self.trainF = open(os.path.join(self.save_path, 'train.csv'), 'w')
@@ -736,7 +736,6 @@ class BilevelFedDistManager(FedDistManager):
         # get the dataset from the origin dataset
         self.train_dataset, self.test_dataset, self.user_groups = self.get_dataset()
         
-        print(f"type of self.user_groups: {type(self.user_groups)}")
         # initialize the global model and save the weight
         self.global_net = self.get_net().to(self.device)
         
@@ -744,12 +743,8 @@ class BilevelFedDistManager(FedDistManager):
         net_weight = self.global_net.state_dict()
         # find the hyper param
         self.hyper_param = [k for n,k in self.global_net.named_parameters() if not "header" in n]
-        self.hyper_param_init = [k for n,k in self.global_net.named_parameters() if not "header" in n]
         self.hyper_optimizer = torch.optim.SGD(self.hyper_param, lr=1)
         self.val_loss = self.cross_entropy
-        self.loss_func = self.cross_entropy_reg
-        
-        self.beta = 0.1
         
         # print the net information for debug
         number_param = sum([p.data.nelement() for p in self.global_net.parameters()])
@@ -781,9 +776,10 @@ class BilevelFedDistManager(FedDistManager):
                 
                 train_loss.append(loss_avg)
                 train_accuracy.append(sum(list_acc)/len(list_acc))
+            
             # complete FedOut
             idxs_users = np.random.choice(range(config_dict['num_users']), m, replace=False)
-            print(f"self.global_net: {self.global_net}")
+            
             self.fed_out_train(idxs_users, epoch)
             
             if (epoch+1) % 5 == 0:
@@ -792,8 +788,6 @@ class BilevelFedDistManager(FedDistManager):
                 print('Train Accuracy: {:.2f}% \n'.format(100*train_accuracy[-1]))
                 
             test_acc, test_loss = self.global_test(self.global_net)
-            print(f"global test result:")
-            print(f"\ttest_acc: {test_acc}, test_loss: {test_loss}")
             if self.slurm_id:
                 # run at Slurm job cluster
                 self.logger.add_scalars(f"{self.slurm_id}/accuracy", {"train_acc": train_accuracy[-1], "test_acc": test_acc}, epoch)
@@ -813,7 +807,6 @@ class BilevelFedDistManager(FedDistManager):
         self.trainF.close()
         self.valF.close()
         self.testF.close()
-        
         
     def get_net(self):
         dataset = self.config_dict['dataset']
@@ -855,7 +848,7 @@ class BilevelFedDistManager(FedDistManager):
         train_model = copy.deepcopy(self.global_net)
         for name, w in train_model.named_parameters():
             if not "header" in name:
-                w.requires_grad = False
+                w.requires_grad= False
         optimizer = self.get_optimizer(train_model.parameters())
         self.adjust_opt(optimizer, epoch)
         train_model.train()
@@ -876,17 +869,16 @@ class BilevelFedDistManager(FedDistManager):
                 total += len(images)
                 err = 100.* incorrect / total
                 if self.config_dict['verbose'] and (batch_idx % 10 == 0):
-                    print('aaa| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tacc:{:.2f}'.format(
+                    print('| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tacc:{:.2f}'.format(
                         epoch, iter_cnt, batch_idx * len(images),
                         len(self.trainloader.dataset),
-                        100. * batch_idx / len(self.trainloader), loss.item(), 100 - err))
+                        100. * batch_idx / len(self.trainloader), loss.item(), 1 - err))
                 self.logger.add_scalar('loss', loss.item())
                 batch_loss.append(loss.item())
             self.trainF.write('{},{},{},{:.6f},{}\n'.format(epoch, iter_cnt, user_id, loss.data, err))
             self.trainF.flush()
             epoch_loss.append(sum(batch_loss)/len(batch_loss))
         correct = 0
-        loss = 0
         for batch_idx, (images, labels) in enumerate(self.testloader):
             images, labels = images.to(self.device), labels.to(self.device)
 
@@ -907,16 +899,14 @@ class BilevelFedDistManager(FedDistManager):
         return train_model.state_dict(), accuracy, sum(epoch_loss) / len(epoch_loss)
     
     def fed_out_train(self, idxs_users, epoch):
-        # FedIHGP procedure
+        # lfed_out procedure
         client_locals = []
-        client_locals_init_net = []
         d_out_d_y_locals = []
         self.hyper_iter_locals = []
         for user_id in idxs_users:
             # client= Client(self.args, idx, copy.deepcopy(self.net_glob),self.dataset, self.dict_users, self.hyper_param)
             dataset = self.train_dataset
             idxs = list(self.user_groups[user_id])
-            self.idxs = idxs
             kwargs = {'num_workers': 1, 'pin_memory': True} if torch.cuda.is_available() else {}
             idxs_train = idxs[:int(0.9*len(idxs))]
             # idxs_val = idxs[int(0.8*len(idxs)):int(0.9*len(idxs))]
@@ -929,42 +919,26 @@ class BilevelFedDistManager(FedDistManager):
             self.testloader = DataLoader(DatasetSplit(dataset, idxs_test),
                                     batch_size=self.config_dict['batchSz'], shuffle=False, **kwargs)
             temp_net = copy.deepcopy(self.global_net)
-            # print(f"temp_net: {temp_net}")
-            temp_net.zero_grad()
+            
             client_locals.append(temp_net)
-            client_locals_init_net.append(copy.deepcopy(self.global_net))
             self.hyper_iter_locals.append(0)
-            d_out_d_y, _ = self.grad_d_out_d_y(temp_net, self.trainloader)
+            d_out_d_y = self.grad_d_out_d_y(temp_net, self.trainloader)
             d_out_d_y_locals.append(d_out_d_y)
         p = self.aggregateP(d_out_d_y_locals)
         
         p_locals=[]
         
         if self.config_dict['hvp_method'] == 'global_batch':
-            for _ in range(self.config_dict['neumann']):
+            for i in range(self.config_dict['neumann']):
                 for cnt, client in enumerate(client_locals):
-                    self.ldr_train = DataLoader(DatasetSplit(
-                        dataset, list(self.user_groups[idxs_users[cnt]])), batch_size=self.config_dict['local_bs'], shuffle=True)
-                    self.ldr_val = DataLoader(DatasetSplit(
-                        dataset, list(self.user_groups[idxs_users[-cnt-1]])), batch_size=self.config_dict['local_bs'], shuffle=True)
-                    p_client, self.hyper_iter_locals[cnt] = self.hvp_iter(p, 
-                                                                          self.config_dict['hpr_lr'], 
-                                                                          client, 
-                                                                          self.hyper_iter_locals[cnt])
+                    p_client = self.hvp_iter(p, self.config_dict['hpr_lr'], client, cnt)
                     p_locals.append(p_client)
                 p=self.aggregateP(p_locals)
         elif self.config_dict['hvp_method'] == 'local_batch':
-            for cnt, client in enumerate(client_locals):
-                self.ldr_train = DataLoader(DatasetSplit(
-                    dataset, list(self.user_groups[cnt])), batch_size=self.config_dict['local_bs'], shuffle=True)
-                self.ldr_val = DataLoader(DatasetSplit(
-                    dataset, list(self.user_groups[-cnt-1])), batch_size=self.config_dict['local_bs'], shuffle=True)
+            for client in client_locals:
                 p_client=p.clone()
                 for _ in range(self.config_dict['neumann']):
-                    p_client, self.hyper_iter_locals[cnt] = self.hvp_iter(p_client, 
-                                                                          self.config_dict['hpr_lr'], 
-                                                                          client, 
-                                                                          self.hyper_iter_locals[cnt])
+                    p_client = self.hvp_iter(p_client, self.config_dict['hpr_lr'], client)
                 p_locals.append(p_client)
             p=self.aggregateP(p_locals)
         # elif self.args.hvp_method == 'seperate':
@@ -979,8 +953,8 @@ class BilevelFedDistManager(FedDistManager):
         else:
             raise NotImplementedError
         
-        r = 1+ self.config_dict['neumann']
-        print(p.shape)
+        r = 1+ self.args.neumann
+        
         hg_locals =[]
         for client in client_locals:
             hg= self.hyper_grad(client, p.clone())
@@ -989,9 +963,9 @@ class BilevelFedDistManager(FedDistManager):
         r += 1
         
         hg_locals =[]
-        for cnt, client in enumerate(client_locals):
+        for client in client_locals:
             for _ in range(self.config_dict['outer_tau']):
-                h = self.hyper_svrg_update(client, client_locals_init_net[cnt], hg_glob)
+                h = self.hyper_svrg_update(client, hg_glob)
             hg_locals.append(h)
         hg_glob=self.aggregateP(hg_locals)
         r += 1
@@ -1000,7 +974,7 @@ class BilevelFedDistManager(FedDistManager):
         
     def aggregateP(self, w):
         # print(f"type of w[0]: {type(w[0])}")
-        # print(f"length of w[0]: {len(w[0])}")
+        print(f"length of w[0]: {len(w[0])}")
         w_avg = torch.zeros(w[0].shape[0], dtype=w[0].dtype, device=self.device)
         for k in w:
             w_avg+=k
@@ -1059,15 +1033,13 @@ class BilevelFedDistManager(FedDistManager):
     
     def gather_flat_grad(self, loss_grad):
     # convert the gradient output from list of tensors to to flat vector 
-        return_grad = torch.cat([p.contiguous().view(-1) for p in loss_grad if not p is None])
-        return return_grad
+        return torch.cat([p.contiguous().view(-1) for p in loss_grad if not p is None])
     
-    def hvp_iter(self, p, lr, loc_net, cnt):
-        if cnt == 0:
-            self.d_in_d_y, _, params = self.grad_d_in_d_y(loc_net, self.ldr_train)
+    def hvp_iter(self, p, lr, loc_net):
+        if self.hyper_iter_local == 0:
+            self.d_in_d_y,_ = self.grad_d_in_d_y(loc_net)
             self.counter = p.clone()
-        # params = [k for n,k in loc_net.named_parameters() if "header" in n]
-        # print(f"self.d_in_d_y: {self.d_in_d_y}")
+        params = [k for n,k in loc_net.named_parameters() if "header" in n]
         old_counter = self.counter
         hessian_term = self.gather_flat_grad(
             torch.autograd.grad(self.d_in_d_y, params,
@@ -1075,47 +1047,43 @@ class BilevelFedDistManager(FedDistManager):
         )
         self.counter = old_counter - lr * hessian_term
         p = p+self.counter
-        total_cnt = cnt + 1
-        return p, total_cnt
+        self.hyper_iter += 1
+        return p
     
-    def grad_d_in_d_y(self, local_net, dataloader):
+    def grad_d_in_d_y(self, local_net, dataset_loader):
         self.net0 = copy.deepcopy(local_net)
         self.net0.train()
         hyper_param = [k for n,k in self.net0.named_parameters() if not "header" in n]
         params = [k for n,k in self.net0.named_parameters() if "header" in n]
         num_weights = sum(p.numel() for p in params)
-        d_in_d_y = torch.zeros(num_weights, device=self.device, requires_grad=True)
-        for batch_idx, (images, labels) in enumerate(dataloader):
-            # print(f"labels: {labels}")
+        d_in_d_y = torch.zeros(num_weights, device=self.device)
+        for batch_idx, (images, labels) in enumerate(dataset_loader):
             images, labels = images.to(
                 self.device), labels.to(self.device)
-            
             self.net0.zero_grad()
             log_probs = self.net0(images)
-            loss = self.loss_func(log_probs, labels, hyper_param)
-            d_in_d_y = d_in_d_y + self.gather_flat_grad(grad(loss,
+            loss = self.loss_func(log_probs, labels, params)
+            d_in_d_y += self.gather_flat_grad(grad(loss,
                                          params, create_graph=True))
         d_in_d_y /= (batch_idx+1.)
-        # print(f"gradient: {grad(d_in_d_y, params)}")
-        return d_in_d_y, hyper_param, params
+        return d_in_d_y, hyper_param
     
-    def grad_d_out_d_y(self, local_net, dataloader):
+    def grad_d_out_d_y(self, local_net, dataset_loader):
         self.net0 = copy.deepcopy(local_net)
         self.net0.train()
         hyper_param = [k for n,k in self.net0.named_parameters() if not "header" in n]
         params = [k for n,k in self.net0.named_parameters() if "header" in n]
         num_weights = sum(p.numel() for p in params)
-        d_out_d_y = torch.zeros(num_weights, device=self.device, requires_grad=True)
-        for batch_idx, (images, labels) in enumerate(dataloader):
+        d_out_d_y = torch.zeros(num_weights, device=self.device)
+        for batch_idx, (images, labels) in enumerate(dataset_loader):
             images, labels = images.to(
                 self.device), labels.to(self.device)
             self.net0.zero_grad()
             log_probs = self.net0(images)
             loss = self.val_loss(log_probs, labels)
-            d_out_d_y = d_out_d_y + self.gather_flat_grad(grad(loss,
+            d_out_d_y += self.gather_flat_grad(grad(loss,
                                          params, create_graph=True))
         d_out_d_y /= (batch_idx+1.)
-        
         return d_out_d_y, hyper_param
     
     def grad_d_out_d_x(self, local_net, hyper_param = None):
@@ -1124,7 +1092,7 @@ class BilevelFedDistManager(FedDistManager):
         self.net0 = copy.deepcopy(local_net)
         self.net0.train()
         num_weights = sum(p.numel() for p in self.net0.parameters())
-        d_out_d_x = torch.zeros(num_weights, device=self.device, requires_grad=True)
+        d_out_d_x = torch.zeros(num_weights, device=self.device)
         for batch_idx, (images, labels) in enumerate(self.ldr_val):
             images, labels = images.to(
                 self.device), labels.to(self.device)
@@ -1137,7 +1105,7 @@ class BilevelFedDistManager(FedDistManager):
         return d_out_d_x
     
     def hyper_grad(self, client, p):
-        d_in_d_y, hyper_param, _ =self.grad_d_in_d_y(client, self.ldr_train)
+        d_in_d_y, hyper_param=self.grad_d_in_d_y(client, self.train_dataset)
         indirect_grad= self.gather_flat_grad(
             grad(d_in_d_y,
                 self.get_trainable_hyper_params(hyper_param),
@@ -1158,17 +1126,13 @@ class BilevelFedDistManager(FedDistManager):
         else:
             return params
 
-    def hyper_svrg_update(self, client, client_init, hg):
+    def hyper_svrg_update(self, client, hg):
         try:
             direct_grad = self.grad_d_out_d_x(client)
-            direct_grad_0 = self.grad_d_out_d_x(net=client_init)
+            direct_grad_0 = self.grad_d_out_d_x(client, hyper_param=self.hyper_param_init)
             h = direct_grad - direct_grad_0 + hg
         except:
             h = hg
-        h=h.detach()
-        print("ready to assign hyper gradient")
-        print(f"type(self.hyper_param): {type(self.hyper_param[0])}")
-        print(f"h.shape: {h.shape}")
         self.assign_hyper_gradient(self.hyper_param, h)
         self.hyper_optimizer.step()
         return -self.gather_flat_hyper_params(self.hyper_param)+self.gather_flat_hyper_params(self.hyper_param_init)
@@ -1192,14 +1156,5 @@ class BilevelFedDistManager(FedDistManager):
                     grad = gradient[i:min(i+num,max_len)].clone()
                     para.grad = grad.view(para.shape)
                     i += num
-                    
-    def cross_entropy_reg(self, logits, targets, param):
-        reg = self.beta*sum([torch.norm(k) for k in param])
-        return F.cross_entropy(logits, targets)+0.5*reg
-    
-    def gather_flat_hyper_params(self, params):
-        if isinstance(params,dict):
-            return torch.cat([params[k].view(-1) for k in params if params[k].requires_grad])
-        else:
-            return torch.cat([k.view(-1) for k in params if k.requires_grad])
+
        
