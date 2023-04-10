@@ -9,7 +9,8 @@ import shutil
 import argparse
 import setproctitle
 
-from dist_train import FedDistManager, DecenDistManager, BilevelFedDistManager
+from dist_train import FedDistManager, DecenDistManager
+from dist_bilevel_train import BilevelFedDistManager
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()

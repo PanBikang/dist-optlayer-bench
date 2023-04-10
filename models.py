@@ -22,6 +22,7 @@ class Linear(nn.Module):
         self.x_outer = nn.Parameter(self.x_outer)
     def forward(self, A):
         #y_square = -0.5* torch.t(self.y_header) * self.y_header
+        
         return torch.matmul(A,self.x_outer)
 
 class MLP(nn.Module):
