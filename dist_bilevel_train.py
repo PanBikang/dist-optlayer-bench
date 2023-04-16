@@ -124,7 +124,7 @@ class BilevelFedDistManager(FedDistManager):
         # find the hyper param
         self.hyper_param = [k for n,k in self.global_net.named_parameters() if not "header" in n]
         self.hyper_param_init = [k for n,k in self.global_net.named_parameters() if not "header" in n]
-        self.hyper_optimizer = torch.optim.SGD(self.hyper_param, lr=1)
+        self.hyper_optimizer = torch.optim.SGD(self.hyper_param, lr=self.config_dict["hlr"])
         self.val_loss = self.cross_entropy
         self.loss_func = self.cross_entropy_reg
         self.beta = 1
@@ -286,6 +286,7 @@ class BilevelFedDistManager(FedDistManager):
         self.client_locals = []
         d_out_d_y_locals = []
         self.hyper_iter_locals = []
+        self.counter = []
         for user_id in idxs_users:
             # client= Client(self.args, idx, copy.deepcopy(self.net_glob),self.dataset, self.dict_users, self.hyper_param)
             dataset = self.train_dataset
@@ -382,39 +383,40 @@ class BilevelFedDistManager(FedDistManager):
         reg = self.beta*sum([torch.norm(k) for k in param])
         return F.cross_entropy(logits, targets)+0.5*reg
     
-    def fedIHGP(self,client_locals):
-        d_out_d_y_locals=[]
-        for client in client_locals:
-            d_out_d_y,_=client.grad_d_out_d_y()
-            d_out_d_y_locals.append(d_out_d_y)
-        p=self.aggregateP(d_out_d_y_locals,self.args)
+    # def fedIHGP(self,client_locals):
+    #     d_out_d_y_locals=[]
+    #     for client in client_locals:
+    #         d_out_d_y,_=client.grad_d_out_d_y()
+    #         d_out_d_y_locals.append(d_out_d_y)
+    #     p=self.aggregateP(d_out_d_y_locals,self.args)
         
-        p_locals=[]
-        if self.config_dict['hvp_method'] == 'global_batch':
-            for i in range(self.config_dict['neumann']):
-                for client in client_locals:
-                    p_client = client.hvp_iter(p, self.config_dict['hlr'])
-                    p_locals.append(p_client)
-                p=self.aggregateP(p_locals, self.args)
-        elif self.config_dict['hvp_method'] == 'local_batch':
-            for client in client_locals:
-                p_client=p.clone()
-                for _ in range(self.config_dict['neumann']):
-                    p_client = client.hvp_iter(p_client, self.config_dict['hlr'])
-                p_locals.append(p_client)
-            p=self.aggregateP(p_locals, self.args)
-        # elif self.args.hvp_method == 'seperate':
-        #     for client in client_locals:
-        #         d_out_d_y,_=client.grad_d_out_d_y()
-        #         p_client=d_out_d_y.clone()
-        #         for _ in range(self.args.neumann):
-        #             p_client = client.hvp_iter(p_client, self.args.hlr)
-        #         p_locals.append(p_client)
-        #     p=FedAvgP(p_locals, self.args)
+    #     p_locals=[]
+    #     self.counter = []
+    #     if self.config_dict['hvp_method'] == 'global_batch':
+    #         for i in range(self.config_dict['neumann']):
+    #             for client in client_locals:
+    #                 p_client = client.hvp_iter(p, self.config_dict['hlr'])
+    #                 p_locals.append(p_client)
+    #             p=self.aggregateP(p_locals, self.args)
+    #     elif self.config_dict['hvp_method'] == 'local_batch':
+    #         for client in client_locals:
+    #             p_client=p.clone()
+    #             for _ in range(self.config_dict['neumann']):
+    #                 p_client = client.hvp_iter(p_client, self.config_dict['hlr'])
+    #             p_locals.append(p_client)
+    #         p=self.aggregateP(p_locals, self.args)
+    #     # elif self.args.hvp_method == 'seperate':
+    #     #     for client in client_locals:
+    #     #         d_out_d_y,_=client.grad_d_out_d_y()
+    #     #         p_client=d_out_d_y.clone()
+    #     #         for _ in range(self.args.neumann):
+    #     #             p_client = client.hvp_iter(p_client, self.args.hlr)
+    #     #         p_locals.append(p_client)
+    #     #     p=FedAvgP(p_locals, self.args)
 
-        else:
-            raise NotImplementedError
-        return p
+    #     else:
+    #         raise NotImplementedError
+    #     return p
     
     def gather_flat_grad(self, loss_grad):
     # convert the gradient output from list of tensors to to flat vector 
@@ -423,16 +425,16 @@ class BilevelFedDistManager(FedDistManager):
     def hvp_iter(self, p, lr, loc_net_cnt):
         if self.hyper_iter_locals[loc_net_cnt] == 0:
             self.d_in_d_y, params, _ = self.grad_d_in_d_y(self.client_locals[loc_net_cnt], self.trainloader)
-            self.counter = p.clone()
+            self.counter.append(p.clone())
         else:
             params = [k for n,k in self.client_locals[loc_net_cnt].named_parameters() if "header" in n]
-        old_counter = self.counter
+        old_counter = self.counter[loc_net_cnt]
         hessian_term = self.gather_flat_grad(
             torch.autograd.grad(self.d_in_d_y, params,
-                 grad_outputs=self.counter.view(-1), retain_graph=True)
+                 grad_outputs=self.counter[loc_net_cnt].view(-1), retain_graph=True)
         )
-        self.counter = old_counter - lr * hessian_term
-        p = p+self.counter
+        self.counter[loc_net_cnt] = old_counter - lr * hessian_term
+        p = p+self.counter[loc_net_cnt]
         return p
     
     def grad_d_in_d_y(self, local_net, dataset_loader):
@@ -473,11 +475,12 @@ class BilevelFedDistManager(FedDistManager):
         return d_out_d_y, hyper_param
     
     def grad_d_out_d_x(self, local_net, dataset_loader, hyper_param = None):
-        if hyper_param == None:
-            hyper_param = self.hyper_param
+        
         self.net0 = copy.deepcopy(local_net)
+        if hyper_param == None:
+            hyper_param = [k for n,k in self.net0.named_parameters() if not "header" in n]
         self.net0.train()
-        num_weights = sum(p.numel() for p in self.net0.parameters())
+        num_weights = sum(p.numel() for p in hyper_param)
         d_out_d_x = torch.zeros(num_weights, device=self.device)
         for batch_idx, (images, labels) in enumerate(dataset_loader):
             images, labels = images.to(
@@ -498,12 +501,12 @@ class BilevelFedDistManager(FedDistManager):
                 grad_outputs= p.view(-1),
                 allow_unused= True)
         )
-        try:
-            direct_grad= self.grad_d_out_d_x(client, self.testloader)
-            hyper_grad=direct_grad-self.config_dict['hlr']*indirect_grad
-        except:
-            print(" No direct grad, use only indirect gradient.")
-            hyper_grad=-indirect_grad
+        # try:
+        direct_grad= self.grad_d_out_d_x(client, self.testloader)
+        hyper_grad=direct_grad-self.config_dict['hlr']*indirect_grad
+        # except:
+        #     print(" No direct grad, use only indirect gradient.")
+        #     hyper_grad= - indirect_grad
         return hyper_grad
     
     def get_trainable_hyper_params(self, params):
@@ -518,6 +521,7 @@ class BilevelFedDistManager(FedDistManager):
             direct_grad_0 = self.grad_d_out_d_x(client, hyper_param=self.hyper_param_init)
             h = direct_grad - direct_grad_0 + hg
         except:
+            print(f"hypergradient exception")
             h = hg
         self.assign_hyper_gradient(self.hyper_param, h)
         self.hyper_optimizer.step()
