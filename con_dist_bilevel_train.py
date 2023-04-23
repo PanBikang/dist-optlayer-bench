@@ -362,7 +362,7 @@ class BilevelFedDistManager(FedDistManager):
         
     def aggregateP(self, w):
         # print(f"type of w[0]: {type(w[0])}")
-        print(f"length of w[0]: {len(w[0])}")
+        # print(f"length of w[0]: {len(w[0])}")
         w_avg = torch.zeros(w[0].shape[0], dtype=w[0].dtype, device=self.device)
         for k in w:
             w_avg+=k
@@ -456,27 +456,28 @@ class BilevelFedDistManager(FedDistManager):
         # print(f"origin_hessian_term: {origin_hessian_term.shape}")
         
         
-        for batch_idx, (images, labels) in enumerate(self.trainloader):
-            images, labels = images.to(
-                self.device), labels.to(self.device)
-            features = self.client_locals[loc_net_cnt].feature_extractor(images)
-            # print(f"feature size: {features.shape}")
-            # feature size: torch.Size([64, 84])
-            b = torch.ones([features.shape[0], 1]).to(self.device).double()
-            A = torch.cat((features, b), 1).unsqueeze(1).double()
-            # print(f"A size: {A.shape}")
-            # A size: torch.Size([64, 85])
-            one_hot_labels = F.one_hot(labels).unsqueeze(2).double()
-            A = one_hot_labels @ A 
-            # print(f"A.shape: {A.shape}")
-            # print(f"self.counter[loc_net_cnt].shape: {self.counter[loc_net_cnt].shape}")
-            A_temp = A @ (self.counter[loc_net_cnt].reshape(A.shape[-1], -1).double())
-            A = (A.permute(0, 2, 1) @ A_temp).reshape(A.shape[0], -1)
-            # print(f"A.shape: {A.shape}")
-            # A = A @ self.counter[loc_net_cnt]
-            # print(f"A.shape: {A.shape}")
-            # print(f"hessian_term.shape: {hessian_term.shape}")
-            hessian_term += torch.sum(A, dim=0)
+        if self.config_dict["alt_method"]:
+            for batch_idx, (images, labels) in enumerate(self.trainloader):
+                images, labels = images.to(
+                    self.device), labels.to(self.device)
+                features = self.client_locals[loc_net_cnt].feature_extractor(images)
+                # print(f"feature size: {features.shape}")
+                # feature size: torch.Size([64, 84])
+                b = torch.ones([features.shape[0], 1]).to(self.device).double()
+                A = torch.cat((features, b), 1).unsqueeze(1).double()
+                # print(f"A size: {A.shape}")
+                # A size: torch.Size([64, 85])
+                one_hot_labels = F.one_hot(labels).unsqueeze(2).double()
+                A = one_hot_labels @ A 
+                # print(f"A.shape: {A.shape}")
+                # print(f"self.counter[loc_net_cnt].shape: {self.counter[loc_net_cnt].shape}")
+                A_temp = A @ (self.counter[loc_net_cnt].reshape(A.shape[-1], -1).double())
+                A = (A.permute(0, 2, 1) @ A_temp).reshape(A.shape[0], -1)
+                # print(f"A.shape: {A.shape}")
+                # A = A @ self.counter[loc_net_cnt]
+                # print(f"A.shape: {A.shape}")
+                # print(f"hessian_term.shape: {hessian_term.shape}")
+                hessian_term += torch.sum(A, dim=0)
             
             
 
