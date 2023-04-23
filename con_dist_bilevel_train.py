@@ -218,9 +218,9 @@ class BilevelFedDistManager(FedDistManager):
         dataset = self.train_dataset
         idxs = list(self.user_groups[user_id])
         kwargs = {'num_workers': 1, 'pin_memory': True} if torch.cuda.is_available() else {}
-        idxs_train = idxs[:int(0.9*len(idxs))]
+        idxs_train = idxs[:int(0.25*len(idxs))]
         # idxs_val = idxs[int(0.8*len(idxs)):int(0.9*len(idxs))]
-        idxs_test = idxs[int(0.9*len(idxs)):]
+        idxs_test = idxs[int(0.25*len(idxs)):]
 
         self.trainloader = DataLoader(DatasetSplit(dataset, idxs_train),
                                  batch_size=self.config_dict['batchSz'], shuffle=True, **kwargs)
@@ -294,9 +294,9 @@ class BilevelFedDistManager(FedDistManager):
             dataset = self.train_dataset
             idxs = list(self.user_groups[user_id])
             kwargs = {'num_workers': 1, 'pin_memory': True} if torch.cuda.is_available() else {}
-            idxs_train = idxs[:int(0.9*len(idxs))]
+            idxs_train = idxs[:int(0.25*len(idxs))]
             # idxs_val = idxs[int(0.8*len(idxs)):int(0.9*len(idxs))]
-            idxs_test = idxs[int(0.9*len(idxs)):]
+            idxs_test = idxs[int(0.25*len(idxs)):]
 
             self.trainloader = DataLoader(DatasetSplit(dataset, idxs_train),
                                     batch_size=self.config_dict['batchSz'], shuffle=True, **kwargs)

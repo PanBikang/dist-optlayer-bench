@@ -1,17 +1,17 @@
 # batchsize
-batchSz: 64
+batchSz: 256
 
 # local batchsize default is 10
 local_bs: 10
 
-# the place to save, default is None
+# the place to save, default is null
 save: null
 
 # random seed, default is 1
 seed: 1
 
 # number of epoch, default is 1000
-nEpoch: 10
+nEpoch: 1000
 
 # weightDecay, default is 1e-4
 weightDecay: 1.e-4
