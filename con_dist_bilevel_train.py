@@ -233,6 +233,7 @@ class BilevelFedDistManager(FedDistManager):
             if not "header" in name:
                 w.requires_grad= False
         optimizer = self.get_optimizer(train_model.parameters())
+        
         self.adjust_opt(optimizer, epoch)
         train_model.train()
         epoch_loss = []
@@ -244,7 +245,8 @@ class BilevelFedDistManager(FedDistManager):
 
                 optimizer.zero_grad()
                 log_probs = F.log_softmax(train_model(images))
-                loss = F.nll_loss(log_probs, labels)
+                # loss = F.nll_loss(log_probs, labels)
+                loss = self.hinge_loss(train_model(images), labels)
                 loss.backward()
                 optimizer.step()
                 pred = log_probs.data.max(1)[1]
@@ -383,6 +385,14 @@ class BilevelFedDistManager(FedDistManager):
         reg = self.beta*sum([torch.norm(k) for k in param])
         return F.cross_entropy(logits, targets)+0.5*reg
     
+    def hinge_loss(self, x, y):
+        batch_size = x.shape[0]
+        correct_scores = x[range(batch_size), y]
+        margins = torch.clamp(x - correct_scores.view(-1, 1) + 1, min=0)
+        margins[range(batch_size), y] = 0
+        loss = margins.mean()
+        return loss
+    
     # def fedIHGP(self,client_locals):
     #     d_out_d_y_locals=[]
     #     for client in client_locals:
@@ -423,6 +433,7 @@ class BilevelFedDistManager(FedDistManager):
         return torch.cat([p.contiguous().view(-1) for p in loss_grad if not p is None])
     
     def hvp_iter(self, p, lr, loc_net_cnt):
+        print(f"begin hvp_iter")
         if self.hyper_iter_locals[loc_net_cnt] == 0:
             self.d_in_d_y, params, _ = self.grad_d_in_d_y(self.client_locals[loc_net_cnt], self.trainloader)
             self.counter.append(p.clone())
@@ -433,6 +444,44 @@ class BilevelFedDistManager(FedDistManager):
             torch.autograd.grad(self.d_in_d_y, params,
                  grad_outputs=self.counter[loc_net_cnt].view(-1), retain_graph=True)
         )
+        # origin_hessian_term = self.hessian_d_in_d_yy(self.client_locals[loc_net_cnt], self.trainloader)
+        # print(f"d_in_d_y size: {self.d_in_d_y.shape}")
+        # d_in_d_y size: torch.Size([850])
+        # hessian_term size: torch.Size([850])
+        # self.counter size: torch.Size([850])
+
+        # print(f"hessian_term size: {hessian_term.shape}")
+        # print(f"self.counter size: {self.counter[loc_net_cnt].shape}")
+        
+        # print(f"origin_hessian_term: {origin_hessian_term.shape}")
+        
+        
+        for batch_idx, (images, labels) in enumerate(self.trainloader):
+            images, labels = images.to(
+                self.device), labels.to(self.device)
+            features = self.client_locals[loc_net_cnt].feature_extractor(images)
+            # print(f"feature size: {features.shape}")
+            # feature size: torch.Size([64, 84])
+            b = torch.ones([features.shape[0], 1]).to(self.device).double()
+            A = torch.cat((features, b), 1).unsqueeze(1).double()
+            # print(f"A size: {A.shape}")
+            # A size: torch.Size([64, 85])
+            one_hot_labels = F.one_hot(labels).unsqueeze(2).double()
+            A = one_hot_labels @ A 
+            # print(f"A.shape: {A.shape}")
+            # print(f"self.counter[loc_net_cnt].shape: {self.counter[loc_net_cnt].shape}")
+            A_temp = A @ (self.counter[loc_net_cnt].reshape(A.shape[-1], -1).double())
+            A = (A.permute(0, 2, 1) @ A_temp).reshape(A.shape[0], -1)
+            # print(f"A.shape: {A.shape}")
+            # A = A @ self.counter[loc_net_cnt]
+            # print(f"A.shape: {A.shape}")
+            # print(f"hessian_term.shape: {hessian_term.shape}")
+            hessian_term += torch.sum(A, dim=0)
+            
+            
+
+            # print(f"labels size: {labels.shape}")
+
         self.counter[loc_net_cnt] = old_counter - lr * hessian_term
         p = p+self.counter[loc_net_cnt]
         return p
@@ -479,6 +528,22 @@ class BilevelFedDistManager(FedDistManager):
         self.net0 = copy.deepcopy(local_net)
         if hyper_param == None:
             hyper_param = [k for n,k in self.net0.named_parameters() if not "header" in n]
+        else:
+            counter = 0
+            # print(f"self.net0.state_dict(): {self.net0.state_dict()}")
+            temp_state = copy.deepcopy(self.net0.state_dict())
+            for n in temp_state:
+                if not "header" in n:
+                    # print(f"before substitute: {temp_state[n]}")
+                    temp_state[n] = hyper_param[counter]
+                    # print(f"hyper_param contains: {hyper_param[counter]}")
+                    # print(f"after substitute: {temp_state[n]}")
+                    counter += 1
+            self.net0.load_state_dict(temp_state)
+            # new_temp_state = self.net0.state_dict()
+            # for n in new_temp_state:
+            #     if not "header" in n:
+                    # print(f"actuall for substitue: {new_temp_state[n]}")
         self.net0.train()
         num_weights = sum(p.numel() for p in hyper_param)
         d_out_d_x = torch.zeros(num_weights, device=self.device)
@@ -492,6 +557,29 @@ class BilevelFedDistManager(FedDistManager):
                                          self.get_trainable_hyper_params(hyper_param), create_graph=True))
         d_out_d_x /= (batch_idx+1.)
         return d_out_d_x
+    
+    def hessian_d_in_d_yy(self, local_net, dataset_loader, hyper_param = None):
+        from functools import partial
+        self.net0 = copy.deepcopy(local_net)
+        self.net0.train()
+        hyper_param = [k for n,k in self.net0.named_parameters() if not "header" in n]
+        params = [k for n,k in self.net0.named_parameters() if "header" in n]
+        num_weights = sum(p.numel() for p in params)
+        hessian = torch.zeros((num_weights, num_weights), device=self.device)
+        for batch_idx, (images, labels) in enumerate(dataset_loader):
+            images, labels = images.to(
+                self.device), labels.to(self.device)
+            
+            self.net0.zero_grad()
+            log_probs = F.softmax(self.net0(images))
+            loss = partial(self.loss_func, log_probs, labels)
+            print(f"type of params: {type(params)}")
+            hessian += torch.autograd.functional.hessian(loss, tuple(params))
+            # d_in_d_y += self.gather_flat_grad(grad(loss,
+            #                              params, create_graph=True))
+        hessian /= (batch_idx+1.)
+        
+        return hessian, params, hyper_param
     
     def hyper_grad(self, client, p):
         d_in_d_y, _, hyper_param=self.grad_d_in_d_y(client, self.trainloader)
@@ -520,13 +608,12 @@ class BilevelFedDistManager(FedDistManager):
             direct_grad = self.grad_d_out_d_x(client, self.testloader)
             direct_grad_0 = self.grad_d_out_d_x(client, self.testloader, hyper_param=self.hyper_param_init)
             h = direct_grad - direct_grad_0 + hg
-            print(f"success hypergradient")
         except:
             print(f"hypergradient exception")
             h = hg
         self.assign_hyper_gradient(self.hyper_param, h)
         self.hyper_optimizer.step()
-        return -self.gather_flat_hyper_params(self.hyper_param)+self.gather_flat_hyper_params(self.hyper_param_init)
+        return 0 *(-self.gather_flat_hyper_params(self.hyper_param)+self.gather_flat_hyper_params(self.hyper_param_init))
         
     def assign_hyper_gradient(self, params, gradient):
         i = 0

@@ -10,8 +10,8 @@ import argparse
 import setproctitle
 
 from dist_train import FedDistManager, DecenDistManager
-from dist_bilevel_train import BilevelFedDistManager
-
+# from dist_bilevel_train import BilevelFedDistManager
+from con_dist_bilevel_train import BilevelFedDistManager
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     # default_config_path = os.path.join("old_config", 'mnist_config', "lenet-mnist")

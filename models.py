@@ -51,19 +51,79 @@ class CNNMnist(nn.Module):
         self.conv2 = nn.Conv2d(6, 16, 5)
         # an affine operation: y = Wx + b
         self.fC1_outer = nn.Linear(16 * 5 * 5, 120)  # 5*5 from image dimension
-        self.header1 = nn.Linear(120, 84)
-        self.header2 = nn.Linear(84, 10)
+        self.fC2_outer = nn.Linear(120, 84)
+        # self.header1 = F.relu(nn.Linear(120, 84))
+        self.header = nn.Linear(84, 10)
+        # self.header2 = nn.Linear(120, 10)
 
     def forward(self, x):
         # Max pooling over a (2, 2) window
+        x = self.feature_extractor(x)
+        x = self.header(x)
+        return x
+    
+    def feature_extractor(self, x):
         x = F.max_pool2d(F.relu(self.conv1(x)), (2, 2))
         # If the size is a square, you can specify with a single number
         x = F.max_pool2d(F.relu(self.conv2(x)), 2)
         x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
         x = F.relu(self.fC1_outer(x))
-        x = F.relu(self.header1(x))
-        x = self.header2(x)
+        x = F.relu(self.fC2_outer(x))
         return x
+    
+    
+    
+import numpy as np
+
+class OnlineSVM:
+    def __init__(self, learning_rate=0.01, C=1.0):
+        self.learning_rate = learning_rate
+        self.C = C
+        self.w = None
+        self.b = 0
+    
+    def fit(self, X, y):
+        n_samples, n_features = X.shape
+        self.w = np.zeros(n_features) 
+        for i in range(n_samples): 
+            x = X[i] 
+            y_pred = np.dot(self.w, x) + self.b 
+            if y[i] * y_pred < 1: 
+                self.w = (1 - self.learning_rate) * self.w + self.learning_rate * self.C * y[i] * x 
+                self.b += self.learning_rate * self.C * y[i] 
+            else: 
+                self.w = (1 - self.learning_rate) * self.w
+
+            
+class CNNMnist1(nn.Module):
+    '''
+        Inverse version of CNNMnist model
+    '''
+    def __init__(self,args):
+        super(CNNMnist1, self).__init__()
+        # 1 input image channel, 6 output channels, 5x5 square convolution
+        # kernel
+        self.header1 = nn.Conv2d(1, 6, 5, padding=2)
+        self.header2 = nn.Conv2d(6, 16, 5)
+        # an affine operation: y = Wx + b
+        self.fC1_outer = nn.Linear(16 * 5 * 5, 120)  # 5*5 from image dimension
+        self.fC1_outer1 = nn.Linear(120, 84)
+        self.fC1_outer2 = nn.Linear(84, 10)
+        # self.header2 = nn.Linear(120, 10)
+
+    def forward(self, x):
+        # Max pooling over a (2, 2) window
+        x = F.max_pool2d(F.relu(self.header1(x)), (2, 2))
+        # If the size is a square, you can specify with a single number
+        x = F.max_pool2d(F.relu(self.header2(x)), 2)
+        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+        # x = F.relu(self.fC1_outer(x))
+        x = self.fC1_outer(x)
+        # x = F.relu(self.fC1_outer1(x))
+        x = self.fC1_outer1(x)
+        x = self.fC1_outer2(x)
+        return x    
+
 
 class CNNCifar(nn.Module):
     def __init__(self, args):
