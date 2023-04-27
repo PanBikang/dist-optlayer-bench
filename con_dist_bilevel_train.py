@@ -275,10 +275,10 @@ class BilevelFedDistManager(FedDistManager):
             for batch_idx, (images, labels) in enumerate(self.trainloader):
                 loss = None
                 images, labels = images.to(self.device), labels.to(self.device)
-                # loss = sum([torch.norm(train_model.state_dict()[layer_weight_name], p=2) for layer_weight_name in param_weight_name])
-                # labels_one_hot = 2 * torch.nn.functional.one_hot(loss) - 1
+                loss = sum([torch.norm(train_model.state_dict()[layer_weight_name], p=2) for layer_weight_name in param_weight_name])
+                labels_one_hot = 2 * torch.nn.functional.one_hot(labels) - 1
                 model_output = train_model(images)
-                # temp_loss = torch.clamp(1 - labels_one_hot * model_output, min = 0)
+                temp_loss = torch.clamp(1 - labels_one_hot * model_output, min = 0)
                 
                 optimizer.zero_grad()
                 log_probs = F.log_softmax(model_output)
