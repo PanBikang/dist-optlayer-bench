@@ -237,6 +237,7 @@ class BilevelFedDistManager(FedDistManager):
         self.adjust_opt(optimizer, epoch)
         train_model.train()
         epoch_loss = []
+        # local update inner variable
         for iter_cnt in range(self.config_dict['local_ep']):
             batch_loss = []
             incorrect, total = 0.0, 0.0
@@ -247,6 +248,42 @@ class BilevelFedDistManager(FedDistManager):
                 log_probs = F.log_softmax(train_model(images))
                 # loss = F.nll_loss(log_probs, labels)
                 loss = self.hinge_loss(train_model(images), labels)
+                loss.backward()
+                optimizer.step()
+                pred = log_probs.data.max(1)[1]
+                incorrect += pred.ne(labels.data).cpu().sum()
+                total += len(images)
+                err = 100.* incorrect / total
+                if self.config_dict['verbose'] and (batch_idx % 10 == 0):
+                    print('| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tacc:{:.2f}'.format(
+                        epoch, iter_cnt, batch_idx * len(images),
+                        len(self.trainloader.dataset),
+                        100. * batch_idx / len(self.trainloader), loss.item(), 100 - err))
+                self.logger.add_scalar('loss', loss.item())
+                batch_loss.append(loss.item())
+            self.trainF.write('{},{},{},{:.6f},{}\n'.format(epoch, iter_cnt, user_id, loss.data, err))
+            self.trainF.flush()
+            epoch_loss.append(sum(batch_loss)/len(batch_loss))
+        
+        # print(train_model.state_dict())
+        param_weight_name = [n for n in train_model.state_dict() if 'header' in n and 'weight' in n]
+        # print(train_model.state_dict()[param_weight_name[0]])
+        # calculate hypergradient
+        for iter_cnt in range(self.config_dict['local_ep']):
+            batch_loss = []
+            incorrect, total = 0.0, 0.0
+            for batch_idx, (images, labels) in enumerate(self.trainloader):
+                loss = None
+                images, labels = images.to(self.device), labels.to(self.device)
+                # loss = sum([torch.norm(train_model.state_dict()[layer_weight_name], p=2) for layer_weight_name in param_weight_name])
+                # labels_one_hot = 2 * torch.nn.functional.one_hot(loss) - 1
+                model_output = train_model(images)
+                # temp_loss = torch.clamp(1 - labels_one_hot * model_output, min = 0)
+                
+                optimizer.zero_grad()
+                log_probs = F.log_softmax(model_output)
+                # loss = F.nll_loss(log_probs, labels)
+                loss = self.hinge_loss(model_output, labels)
                 loss.backward()
                 optimizer.step()
                 pred = log_probs.data.max(1)[1]
@@ -388,6 +425,7 @@ class BilevelFedDistManager(FedDistManager):
     def hinge_loss(self, x, y):
         batch_size = x.shape[0]
         correct_scores = x[range(batch_size), y]
+        # print(f"correct_scores.shape: {correct_scores.shape}")
         margins = torch.clamp(x - correct_scores.view(-1, 1) + 1, min=0)
         margins[range(batch_size), y] = 0
         loss = margins.mean()
