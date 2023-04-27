@@ -1,5 +1,6 @@
-__pychache__
+__pychache__/
 experiment
 slurm_result
 logs
 run.slurm
+*.pyc
