@@ -59,7 +59,7 @@ class CNNMnist(nn.Module):
     def forward(self, x):
         # Max pooling over a (2, 2) window
         x = self.feature_extractor(x)
-        x = self.header(x)
+        x = self.classifier(x)
         return x
     
     def feature_extractor(self, x):
@@ -70,6 +70,9 @@ class CNNMnist(nn.Module):
         x = F.relu(self.fC1_outer(x))
         x = F.relu(self.fC2_outer(x))
         return x
+    
+    def classifier(self, x):
+        return self.header(x)
     
     
     
