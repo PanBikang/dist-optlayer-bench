@@ -460,7 +460,7 @@ class BilevelFedDistManager(FedDistManager):
         loss = margins.mean()
         return loss
     
-    def aug_Lag(self, )
+    def aug_Lag(self, ):
     
     def gather_flat_grad(self, loss_grad):
     # convert the gradient output from list of tensors to to flat vector 
