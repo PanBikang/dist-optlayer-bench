@@ -128,7 +128,7 @@ class BilevelFedDistManager(FedDistManager):
         self.val_loss = self.cross_entropy
         self.loss_func = self.cross_entropy_reg
         self.beta = 1
-        
+        self.param_lambda = torch.zeros()
         # print the net information for debug
         number_param = sum([p.data.nelement() for p in self.global_net.parameters()])
         print('  + Number of params: {}'.format(number_param))
@@ -245,7 +245,7 @@ class BilevelFedDistManager(FedDistManager):
                 images, labels = images.to(self.device), labels.to(self.device)
 
                 optimizer.zero_grad()
-                log_probs = F.log_softmax(train_model(images))
+                log_probs = F.log_softmax(train_model(images), dim=1)
                 # loss = F.nll_loss(log_probs, labels)
                 loss = self.hinge_loss(train_model(images), labels)
                 loss.backward()
@@ -267,6 +267,7 @@ class BilevelFedDistManager(FedDistManager):
         
         # print(train_model.state_dict())
         param_weight_name = [n for n in train_model.state_dict() if 'header' in n and 'weight' in n]
+        param_bias_name = [n for n in train_model.state_dict() if 'header' in n and 'bias' in n]
         # print(train_model.state_dict()[param_weight_name[0]])
         # calculate hypergradient
         for iter_cnt in range(self.config_dict['local_ep']):
@@ -275,13 +276,41 @@ class BilevelFedDistManager(FedDistManager):
             for batch_idx, (images, labels) in enumerate(self.trainloader):
                 loss = None
                 images, labels = images.to(self.device), labels.to(self.device)
+                b_size = images.shape[0]
                 loss = sum([torch.norm(train_model.state_dict()[layer_weight_name], p=2) for layer_weight_name in param_weight_name])
                 labels_one_hot = 2 * torch.nn.functional.one_hot(labels) - 1
-                model_output = train_model(images)
-                temp_loss = torch.clamp(1 - labels_one_hot * model_output, min = 0)
+                features = train_model.feature_extractor(images)
+                model_output = train_model.classifier(features)
+                C = 1
+                xi = torch.clamp(1 - labels_one_hot * model_output, min = 0)
+                print(f"xi.shape: {xi.shape}")
+                loss += C * torch.sum(torch.sum(xi, dim=1), dim=0)
+                b = torch.ones([features.shape[0], 1]).to(self.device).double()
+                A = torch.cat((features, b), 1).unsqueeze(1).double()
+                one_hot_labels = F.one_hot(labels).unsqueeze(2).double()
+                A = one_hot_labels @ A
+                # print(f"A size: {A.shape}")
+                # A size: torch.Size([256, 10, 85])
+                weight = train_model.state_dict()[param_weight_name[0]]
+                bias = train_model.state_dict()[param_bias_name[0]]
+                temp = torch.cat((weight, bias.unsqueeze(1)), 1)
+                print(f"temp.shape: {temp.shape}")
+                temp = torch.sum(A * temp, dim=2) + xi
+                A = torch.ones(temp.shape).to(self.device) - temp
                 
+                
+                # temp = A * train_model.state_dict()[param_weight_name[0]]
+                # print(temp.shape)
+                # temp = torch.eye(model_output.shape[1]).to(self.device).unsqueeze(0).repeat(b_size, 1, 1) # 10 classes
+                A = torch.cat((A, temp), 2)
+                # print(f"A size: {A.shape}")
+                # A size: torch.Size([256, 10, 95])
+                weight = train_model.state_dict()[param_weight_name[0]]
+                bias = train_model.state_dict()[param_bias_name[0]]
+                temp = torch.cat((torch.cat((weight, bias), 1).unsqueeze(0).repeat(b_size, 1, 1), xi), 2)
+                print(f"temp.shape: {temp.shape}")
                 optimizer.zero_grad()
-                log_probs = F.log_softmax(model_output)
+                log_probs = F.log_softmax(model_output, dim=1)
                 # loss = F.nll_loss(log_probs, labels)
                 loss = self.hinge_loss(model_output, labels)
                 loss.backward()
@@ -305,14 +334,14 @@ class BilevelFedDistManager(FedDistManager):
             images, labels = images.to(self.device), labels.to(self.device)
 
             # Inference
-            outputs = F.log_softmax(train_model(images))
+            outputs = F.log_softmax(train_model(images), dim=1)
             batch_loss = F.nll_loss(outputs, labels)
             loss += batch_loss.item()
 
             # Prediction
             _, pred_labels = torch.max(outputs, 1)
             pred_labels = pred_labels.view(-1)
-            correct += torch.sum(torch.eq(pred_labels, labels)).item()
+            correct += torch.sum(torch.eq(pred_labels, labels), dim=0).item()
             total += len(labels)
         accuracy = correct/total
         self.valF.write('{},{},{},{}\n'.format(epoch, user_id, loss, 1 - accuracy))
@@ -431,40 +460,7 @@ class BilevelFedDistManager(FedDistManager):
         loss = margins.mean()
         return loss
     
-    # def fedIHGP(self,client_locals):
-    #     d_out_d_y_locals=[]
-    #     for client in client_locals:
-    #         d_out_d_y,_=client.grad_d_out_d_y()
-    #         d_out_d_y_locals.append(d_out_d_y)
-    #     p=self.aggregateP(d_out_d_y_locals,self.args)
-        
-    #     p_locals=[]
-    #     self.counter = []
-    #     if self.config_dict['hvp_method'] == 'global_batch':
-    #         for i in range(self.config_dict['neumann']):
-    #             for client in client_locals:
-    #                 p_client = client.hvp_iter(p, self.config_dict['hlr'])
-    #                 p_locals.append(p_client)
-    #             p=self.aggregateP(p_locals, self.args)
-    #     elif self.config_dict['hvp_method'] == 'local_batch':
-    #         for client in client_locals:
-    #             p_client=p.clone()
-    #             for _ in range(self.config_dict['neumann']):
-    #                 p_client = client.hvp_iter(p_client, self.config_dict['hlr'])
-    #             p_locals.append(p_client)
-    #         p=self.aggregateP(p_locals, self.args)
-    #     # elif self.args.hvp_method == 'seperate':
-    #     #     for client in client_locals:
-    #     #         d_out_d_y,_=client.grad_d_out_d_y()
-    #     #         p_client=d_out_d_y.clone()
-    #     #         for _ in range(self.args.neumann):
-    #     #             p_client = client.hvp_iter(p_client, self.args.hlr)
-    #     #         p_locals.append(p_client)
-    #     #     p=FedAvgP(p_locals, self.args)
-
-    #     else:
-    #         raise NotImplementedError
-    #     return p
+    def aug_Lag(self, )
     
     def gather_flat_grad(self, loss_grad):
     # convert the gradient output from list of tensors to to flat vector 
@@ -537,7 +533,7 @@ class BilevelFedDistManager(FedDistManager):
                 self.device), labels.to(self.device)
             
             self.net0.zero_grad()
-            log_probs = F.softmax(self.net0(images))
+            log_probs = F.softmax(self.net0(images), dim=1)
             loss = self.loss_func(log_probs, labels, params)
             d_in_d_y += self.gather_flat_grad(grad(loss,
                                          params, create_graph=True))
@@ -555,7 +551,7 @@ class BilevelFedDistManager(FedDistManager):
             images, labels = images.to(
                 self.device), labels.to(self.device)
             self.net0.zero_grad()
-            log_probs = F.softmax(self.net0(images))
+            log_probs = F.softmax(self.net0(images), dim=1)
             loss = self.val_loss(log_probs, labels)
             d_out_d_y += self.gather_flat_grad(grad(loss,
                                          params, create_graph=True))
@@ -590,7 +586,7 @@ class BilevelFedDistManager(FedDistManager):
             images, labels = images.to(
                 self.device), labels.to(self.device)
             self.net0.zero_grad()
-            log_probs = F.softmax(self.net0(images))
+            log_probs = F.softmax(self.net0(images), dim=1)
             loss = self.val_loss(log_probs, labels)
             d_out_d_x += self.gather_flat_grad(grad(loss,
                                          self.get_trainable_hyper_params(hyper_param), create_graph=True))
