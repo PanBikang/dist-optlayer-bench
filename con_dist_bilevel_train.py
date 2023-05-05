@@ -4,8 +4,6 @@ import json
 
 import argparse
 
-try: import setGPU
-except ImportError: pass
 import numpy as np
 
 
@@ -41,6 +39,7 @@ import yaml
 # from IPython.core import ultratb
 
 from update import LocalUpdate, test_inference
+from qpth.qp import QPFunction
 from dist_train import FedDistManager
 
 class DatasetSplit(Dataset):
@@ -128,7 +127,7 @@ class BilevelFedDistManager(FedDistManager):
         self.val_loss = self.cross_entropy
         self.loss_func = self.cross_entropy_reg
         self.beta = 1
-        self.param_lambda = torch.zeros()
+        # self.param_lambda = torch.zeros()
         # print the net information for debug
         number_param = sum([p.data.nelement() for p in self.global_net.parameters()])
         print('  + Number of params: {}'.format(number_param))
@@ -235,21 +234,96 @@ class BilevelFedDistManager(FedDistManager):
         optimizer = self.get_optimizer(train_model.parameters())
         
         self.adjust_opt(optimizer, epoch)
+        self.param_weight_name = [n for n in train_model.state_dict() if 'header' in n and 'weight' in n][0]
+        self.param_bias_name = [n for n in train_model.state_dict() if 'header' in n and 'bias' in n][0]
+        
         train_model.train()
         epoch_loss = []
+        svm_lr = 0.01
         # local update inner variable
         for iter_cnt in range(self.config_dict['local_ep']):
             batch_loss = []
             incorrect, total = 0.0, 0.0
             for batch_idx, (images, labels) in enumerate(self.trainloader):
                 images, labels = images.to(self.device), labels.to(self.device)
-
+                labels_one_hot =  (2 * torch.nn.functional.one_hot(labels) - 1)
+                # extract feature
+                features = train_model.feature_extractor(images)
+                # max-margin loss
+                # loss = sum([torch.norm(train_model.state_dict()[layer_weight_name], p='fro') for layer_weight_name in self.param_weight_name])
+                b_size = features.shape[0] # 256
+                
+                f_size = features.shape[1] # 84
+                c_size = labels_one_hot.shape[1] # 10
+                Q_1 = torch.eye(f_size)
+                Q_2 = torch.zeros([1, 1])
+                Q_3 = torch.zeros([b_size, b_size])
+                Q_4 = torch.zeros([1, 1])
+                Q_single = torch.block_diag(Q_1, Q_2, Q_3, Q_4).to(self.device)
+                Q_single += 0.001 * torch.eye(f_size + 2 + b_size).to(self.device)
+                # print(Q_single)
+                Q = Q_single.repeat(c_size, 1, 1).double()
+                # print(f"Q.shape: {Q.shape}")
+                p_1 = torch.zeros([f_size+1]).to(self.device)
+                p_2 = 3 * torch.ones([b_size]).to(self.device)
+                p_3 = torch.zeros([1]).to(self.device)
+                p_single = torch.cat((p_1, p_2, p_3))
+                p = p_single.repeat(c_size, 1).double()
+                # print(f"p.shape: {p.shape}")
+                
+                
+                # construct matrix A
+                # one hot label
+                
+                # print(f"labels_one_hot.shape:{labels_one_hot.shape}")
+                b = torch.ones([b_size, 1]).to(self.device).double()
+                # print(f"features.shape[0]: {features.shape[0]}")
+                A = torch.cat((features, b), 1).unsqueeze(1).double()
+                A = (labels_one_hot.unsqueeze(2).double() @ A).permute(1, 0, 2)
+                b = torch.eye(b_size).repeat(c_size, 1, 1).to(self.device).double()
+                b_1 = torch.zeros([c_size, b_size, 1]).to(self.device).double()
+                A = torch.cat((A, b, b_1), 2)
+                A_1 = torch.zeros([c_size, b_size, f_size+1]).to(self.device).double()
+                A_2 = torch.eye(b_size).repeat(c_size, 1, 1).to(self.device).double()
+                A_3 = torch.zeros([c_size, b_size, 1]).to(self.device).double()
+                A_4 = torch.cat((A_1, A_2, A_3), 2)
+                A = -1 * torch.cat((A, A_4), 1)
+                # print(f"A: {A}")
+                b_1 = torch.ones([c_size, b_size]).to(self.device).double()
+                b_2 = torch.zeros([c_size, b_size]).to(self.device).double()
+                # print(f"b_1.shape: {b_1.shape}")
+                # print(f"b_2.shape: {b_2.shape}")
+                b = -1 * torch.cat((b_1, b_2), 1)
+                # print(f"A.shape: {A.shape}")
+                # print(f"b.shape: {b.shape}")
+                
+                G = torch.zeros([c_size, 1, f_size + 1 + b_size + 1]).to(self.device).double()
+                G[:,0,-1] = 1
+                h = torch.zeros([c_size, 1]).to(self.device).double()
+                e = Variable(torch.Tensor())
+                # print(f"A.shape: {A.shape}")
+                # print(f"b.shape: {b.shape}")
+                # print(f"Q.shape: {Q.shape}")
+                # print(f"p.shape: {p.shape}")
+                x = QPFunction(verbose=False)(Q, p, A, b, G, h)
+                # print(f"x: {x}")
+                # print(f"x.shape: {x.shape}")
+                w, b = x[:, :f_size], x[:, f_size]
+                # print(w, b)
+                # print(f"w.shape: {w.shape}")
+                # print(f"b.shape: {b.shape}")
+                new_weight = (1 - svm_lr) * train_model.state_dict()[self.param_weight_name] + svm_lr * w
+                new_bias = (1 - svm_lr) * train_model.state_dict()[self.param_bias_name] + svm_lr * b
+                train_model.state_dict()[self.param_weight_name].copy_(new_weight)
+                train_model.state_dict()[self.param_bias_name].copy_(new_bias)
+                
+                
                 optimizer.zero_grad()
                 log_probs = F.log_softmax(train_model(images), dim=1)
                 # loss = F.nll_loss(log_probs, labels)
                 loss = self.hinge_loss(train_model(images), labels)
-                loss.backward()
-                optimizer.step()
+                # loss.backward()
+                # optimizer.step()
                 pred = log_probs.data.max(1)[1]
                 incorrect += pred.ne(labels.data).cpu().sum()
                 total += len(images)
@@ -266,18 +340,16 @@ class BilevelFedDistManager(FedDistManager):
             epoch_loss.append(sum(batch_loss)/len(batch_loss))
         
         # print(train_model.state_dict())
-        param_weight_name = [n for n in train_model.state_dict() if 'header' in n and 'weight' in n]
-        param_bias_name = [n for n in train_model.state_dict() if 'header' in n and 'bias' in n]
+        
         # print(train_model.state_dict()[param_weight_name[0]])
         # calculate hypergradient
         for iter_cnt in range(self.config_dict['local_ep']):
             batch_loss = []
             incorrect, total = 0.0, 0.0
             for batch_idx, (images, labels) in enumerate(self.trainloader):
-                loss = None
                 images, labels = images.to(self.device), labels.to(self.device)
                 b_size = images.shape[0]
-                loss = sum([torch.norm(train_model.state_dict()[layer_weight_name], p=2) for layer_weight_name in param_weight_name])
+                loss = sum([torch.norm(train_model.state_dict()[layer_weight_name], p=2) for layer_weight_name in self.param_weight_name])
                 labels_one_hot = 2 * torch.nn.functional.one_hot(labels) - 1
                 features = train_model.feature_extractor(images)
                 model_output = train_model.classifier(features)
@@ -285,19 +357,16 @@ class BilevelFedDistManager(FedDistManager):
                 xi = torch.clamp(1 - labels_one_hot * model_output, min = 0)
                 print(f"xi.shape: {xi.shape}")
                 loss += C * torch.sum(torch.sum(xi, dim=1), dim=0)
-                b = torch.ones([features.shape[0], 1]).to(self.device).double()
-                A = torch.cat((features, b), 1).unsqueeze(1).double()
-                one_hot_labels = F.one_hot(labels).unsqueeze(2).double()
-                A = one_hot_labels @ A
+                
                 # print(f"A size: {A.shape}")
                 # A size: torch.Size([256, 10, 85])
-                weight = train_model.state_dict()[param_weight_name[0]]
-                bias = train_model.state_dict()[param_bias_name[0]]
+                weight = train_model.state_dict()[self.param_weight_name[0]]
+                bias = train_model.state_dict()[self.param_bias_name[0]]
                 temp = torch.cat((weight, bias.unsqueeze(1)), 1)
                 print(f"temp.shape: {temp.shape}")
                 temp = torch.sum(A * temp, dim=2) + xi
                 A = torch.ones(temp.shape).to(self.device) - temp
-                
+                print(f"A.shape")
                 
                 # temp = A * train_model.state_dict()[param_weight_name[0]]
                 # print(temp.shape)
@@ -305,8 +374,8 @@ class BilevelFedDistManager(FedDistManager):
                 A = torch.cat((A, temp), 2)
                 # print(f"A size: {A.shape}")
                 # A size: torch.Size([256, 10, 95])
-                weight = train_model.state_dict()[param_weight_name[0]]
-                bias = train_model.state_dict()[param_bias_name[0]]
+                weight = train_model.state_dict()[self.param_weight_name[0]]
+                bias = train_model.state_dict()[self.param_bias_name[0]]
                 temp = torch.cat((torch.cat((weight, bias), 1).unsqueeze(0).repeat(b_size, 1, 1), xi), 2)
                 print(f"temp.shape: {temp.shape}")
                 optimizer.zero_grad()
@@ -459,6 +528,38 @@ class BilevelFedDistManager(FedDistManager):
         margins[range(batch_size), y] = 0
         loss = margins.mean()
         return loss
+    
+    def aug_lag(self, images, labels, train_model, param_lambda, param_rho, param_s):
+        b_size = images.shape[0]
+        
+        loss = sum([torch.norm(train_model.state_dict()[layer_weight_name], p=2) for layer_weight_name in param_weight_name])
+        labels_one_hot = 2 * torch.nn.functional.one_hot(labels) - 1
+        features = train_model.feature_extractor(images)
+        model_output = train_model.classifier(features)
+        C = 1
+        xi = torch.clamp(1 - labels_one_hot * model_output, min = 0)
+        print(f"xi.shape: {xi.shape}")
+        loss += C * torch.sum(torch.sum(xi, dim=1), dim=0)
+        b = torch.ones([features.shape[0], 1]).to(self.device).double()
+        A = torch.cat((features, b), 1).unsqueeze(1).double()
+        one_hot_labels = F.one_hot(labels).unsqueeze(2).double()
+        A = one_hot_labels @ A
+        # print(f"A size: {A.shape}")
+        # A size: torch.Size([256, 10, 85])
+        weight = train_model.state_dict()[self.param_weight_name[0]]
+        bias = train_model.state_dict()[self.param_bias_name[0]]
+        temp = torch.cat((weight, bias.unsqueeze(1)), 1)
+        print(f"temp.shape: {temp.shape}")
+        temp = torch.sum(A * temp, dim=2) + xi
+        A = torch.ones(temp.shape).to(self.device) - temp
+        
+        
+        # temp = A * train_model.state_dict()[param_weight_name[0]]
+        # print(temp.shape)
+        # temp = torch.eye(model_output.shape[1]).to(self.device).unsqueeze(0).repeat(b_size, 1, 1) # 10 classes
+        A = torch.cat((A, temp), 2)
+        return loss
+        
     
     def gather_flat_grad(self, loss_grad):
     # convert the gradient output from list of tensors to to flat vector 
