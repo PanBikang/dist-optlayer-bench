@@ -246,11 +246,11 @@ class BilevelFedDistManager(FedDistManager):
             batch_loss = []
             incorrect, total = 0.0, 0.0
             iter_step = 1
-            
+            new_weight = train_model.state_dict()[self.param_weight_name]
+            new_bias = train_model.state_dict()[self.param_bias_name]
             for batch_idx, (images, labels) in enumerate(self.trainloader):
                 
-                new_weight = train_model.state_dict()[self.param_weight_name]
-                new_bias = train_model.state_dict()[self.param_bias_name]
+                
                 images, labels = images.to(self.device), labels.to(self.device)
                 labels_one_hot =  (2 * torch.nn.functional.one_hot(labels) - 1)
                 self.hyper_optimizer.zero_grad()
