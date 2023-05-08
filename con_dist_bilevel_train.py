@@ -124,7 +124,7 @@ class BilevelFedDistManager(FedDistManager):
         # find the hyper param
         self.hyper_param = [k for n,k in self.global_net.named_parameters() if not "header" in n]
         self.hyper_param_init = [k for n,k in self.global_net.named_parameters() if not "header" in n]
-        self.hyper_optimizer = torch.optim.SGD(self.hyper_param, lr=self.config_dict["hlr"])
+        # self.hyper_optimizer = torch.optim.SGD(self.hyper_param, lr=self.config_dict["hlr"])
         self.val_loss = self.cross_entropy
         self.loss_func = self.cross_entropy_reg
         self.beta = 1
@@ -285,10 +285,10 @@ class BilevelFedDistManager(FedDistManager):
                 # print(w, b)
                 # print(f"w.shape: {w.shape}")
                 # print(f"b.shape: {b.shape}")
-                # new_weight = (1 - (1 / (iter_step + 1))) * new_weight + (1 / (iter_step + 1)) * w
-                # new_bias = (1 - (1 / (iter_step + 1))) * new_bias + (1 / (iter_step + 1)) * b
-                new_weight = (1 - svm_lr) * new_weight + svm_lr * w
-                new_bias = (1 - svm_lr) * new_bias + svm_lr * b
+                new_weight = (1 - (1 / (iter_step + 1))) * new_weight + (1 / (iter_step + 1)) * w
+                new_bias = (1 - (1 / (iter_step + 1))) * new_bias + (1 / (iter_step + 1)) * b
+                # new_weight = (1 - svm_lr) * new_weight + svm_lr * w
+                # new_bias = (1 - svm_lr) * new_bias + svm_lr * b
                 iter_step += 1
                 # print(f"new_weight.requires_grad: {new_weight.requires_grad}")
                 # train_model.state_dict()[self.param_weight_name].copy_(w)
@@ -355,6 +355,8 @@ class BilevelFedDistManager(FedDistManager):
             
         accuracy = correct/total
         print(f"test acc: {accuracy}")
+        self.logger.add_scalar('test_loss', loss.item())
+        self.logger.add_scalar("test_acc", accuracy)
         self.valF.write('{},{},{},{}\n'.format(epoch, user_id, loss, 1 - accuracy))
         self.valF.flush()
         
