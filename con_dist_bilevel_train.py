@@ -337,6 +337,7 @@ class BilevelFedDistManager(FedDistManager):
         
         # print(train_model.state_dict()[param_weight_name[0]])
         correct = 0
+        total = 0
         for batch_idx, (images, labels) in enumerate(self.testloader):
             images, labels = images.to(self.device), labels.to(self.device)
 
