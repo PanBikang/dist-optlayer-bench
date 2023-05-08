@@ -148,9 +148,14 @@ def diff(eps=1e-3, verbose=0):
     class Newlayer(Function):
         @staticmethod
         def forward(ctx, P_, q_, G_, h_, A_, b_):
-            n, m, d = b_.shape[1], q_.shape[1], h_.shape[1]
+            # n, m, d = b_.shape[1], q_.shape[1], h_.shape[1]
             # print(n, m, d)
             P = decode(P_)
+            # q = q_.numpy()
+            # G = G_.numpy()
+            # h = h_.numpy()
+            # A = A_.numpy()
+            # b = b_.numpy()
             q = q_.numpy()
             G = G_.numpy()
             h = h_.numpy()
