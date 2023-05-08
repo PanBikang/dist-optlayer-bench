@@ -40,6 +40,7 @@ import yaml
 
 from update import LocalUpdate, test_inference
 from qpth.qp import QPFunction
+from opt_layer import diff
 from dist_train import FedDistManager
 
 class DatasetSplit(Dataset):
@@ -60,7 +61,7 @@ class DatasetSplit(Dataset):
         # return Variable(image), Variable(label)
 
 class DistManager(object):
-    def __init__(self, save_path, seed=42) -> None:
+    def __init__(self, save_path, seed=10) -> None:
         self.save_path = save_path
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         torch.manual_seed(seed)
@@ -160,9 +161,9 @@ class BilevelFedDistManager(FedDistManager):
                 train_accuracy.append(sum(list_acc)/len(list_acc))
             
             # complete FedOut
-            idxs_users = np.random.choice(range(config_dict['num_users']), m, replace=False)
+            # idxs_users = np.random.choice(range(config_dict['num_users']), m, replace=False)
             
-            self.fed_out_train(idxs_users, epoch)
+            # self.fed_out_train(idxs_users, epoch)
             
             if (epoch+1) % 5 == 0:
                 print(f' \nAvg Training Stats after {epoch+1} global rounds:')
@@ -212,14 +213,15 @@ class BilevelFedDistManager(FedDistManager):
 
         return net
     
+    @torch.autocast(device_type='cuda', dtype=torch.double)
     def local_train(self, user_id, epoch):
         # split indexes for train, validation, and test (80, 10, 10)
         dataset = self.train_dataset
         idxs = list(self.user_groups[user_id])
         kwargs = {'num_workers': 1, 'pin_memory': True} if torch.cuda.is_available() else {}
-        idxs_train = idxs[:int(0.25*len(idxs))]
+        idxs_train = idxs[:int(0.8*len(idxs))]
         # idxs_val = idxs[int(0.8*len(idxs)):int(0.9*len(idxs))]
-        idxs_test = idxs[int(0.25*len(idxs)):]
+        idxs_test = idxs[int(0.8*len(idxs)):]
 
         self.trainloader = DataLoader(DatasetSplit(dataset, idxs_train),
                                  batch_size=self.config_dict['batchSz'], shuffle=True, **kwargs)
@@ -228,12 +230,11 @@ class BilevelFedDistManager(FedDistManager):
         self.testloader = DataLoader(DatasetSplit(dataset, idxs_test),
                                 batch_size=self.config_dict['batchSz'], shuffle=False, **kwargs)
         train_model = copy.deepcopy(self.global_net)
-        for name, w in train_model.named_parameters():
-            if not "header" in name:
-                w.requires_grad= False
-        optimizer = self.get_optimizer(train_model.parameters())
         
-        self.adjust_opt(optimizer, epoch)
+        # optimizer = self.get_optimizer(train_model.parameters())
+        local_hyper_param = [k for n,k in train_model.named_parameters() if not "header" in n]
+        self.hyper_optimizer = torch.optim.SGD(local_hyper_param, lr=self.config_dict["hlr"])
+        # self.adjust_opt(optimizer, epoch)
         self.param_weight_name = [n for n in train_model.state_dict() if 'header' in n and 'weight' in n][0]
         self.param_bias_name = [n for n in train_model.state_dict() if 'header' in n and 'bias' in n][0]
         
@@ -244,89 +245,85 @@ class BilevelFedDistManager(FedDistManager):
         for iter_cnt in range(self.config_dict['local_ep']):
             batch_loss = []
             incorrect, total = 0.0, 0.0
+            iter_step = 1
+            
             for batch_idx, (images, labels) in enumerate(self.trainloader):
+                
+                new_weight = train_model.state_dict()[self.param_weight_name]
+                new_bias = train_model.state_dict()[self.param_bias_name]
                 images, labels = images.to(self.device), labels.to(self.device)
                 labels_one_hot =  (2 * torch.nn.functional.one_hot(labels) - 1)
+                self.hyper_optimizer.zero_grad()
                 # extract feature
                 features = train_model.feature_extractor(images)
+
+                f_size = features.shape[1]
                 # max-margin loss
                 # loss = sum([torch.norm(train_model.state_dict()[layer_weight_name], p='fro') for layer_weight_name in self.param_weight_name])
-                b_size = features.shape[0] # 256
-                
-                f_size = features.shape[1] # 84
-                c_size = labels_one_hot.shape[1] # 10
-                Q_1 = torch.eye(f_size)
-                Q_2 = torch.zeros([1, 1])
-                Q_3 = torch.zeros([b_size, b_size])
-                Q_single = torch.block_diag(Q_1, Q_2, Q_3).to(self.device)
-                Q_single += 0.001 * torch.eye(f_size + 1 + b_size).to(self.device)
-                # print(Q_single)
-                Q = Q_single.repeat(c_size, 1, 1).double()
-                # print(f"Q.shape: {Q.shape}")
-                p_1 = torch.zeros([f_size+1]).to(self.device)
-                p_2 = 3 * torch.ones([b_size]).to(self.device)
-                p_single = torch.cat((p_1, p_2))
-                p = p_single.repeat(c_size, 1).double()
-                # print(f"p.shape: {p.shape}")
-                
-                
-                # construct matrix A
-                # one hot label
-                
-                # print(f"labels_one_hot.shape:{labels_one_hot.shape}")
-                b = torch.ones([b_size, 1]).to(self.device).double()
-                # print(f"features.shape[0]: {features.shape[0]}")
-                A = torch.cat((features, b), 1).unsqueeze(1).double()
-                A = (labels_one_hot.unsqueeze(2).double() @ A).permute(1, 0, 2)
-                b = torch.eye(b_size).repeat(c_size, 1, 1).to(self.device).double()
-                # b_1 = torch.zeros([c_size, b_size, 1]).to(self.device).double()
-                A = torch.cat((A, b), 2)
-                A_1 = torch.zeros([c_size, b_size, f_size+1]).to(self.device).double()
-                A_2 = torch.eye(b_size).repeat(c_size, 1, 1).to(self.device).double()
-                A_4 = torch.cat((A_1, A_2), 2)
-                A = -1 * torch.cat((A, A_4), 1)
-                # print(f"A: {A}")
-                b_1 = torch.ones([c_size, b_size]).to(self.device).double()
-                b_2 = torch.zeros([c_size, b_size]).to(self.device).double()
-                # print(f"b_1.shape: {b_1.shape}")
-                # print(f"b_2.shape: {b_2.shape}")
-                b = -1 * torch.cat((b_1, b_2), 1)
+                Q, p , A, b = self.svm_matrix_gen(features, labels_one_hot)
+                e = Variable(torch.Tensor())
                 # print(f"A.shape: {A.shape}")
                 # print(f"b.shape: {b.shape}")
                 
                 # G = torch.zeros([c_size, 1, f_size + 1 + b_size + 1]).to(self.device).double()
                 # G[:,0,-1] = 1
                 # h = torch.zeros([c_size, 1]).to(self.device).double()
-                e = Variable(torch.Tensor())
+                
                 # print(f"A.shape: {A.shape}")
                 # print(f"b.shape: {b.shape}")
                 # print(f"Q.shape: {Q.shape}")
                 # print(f"p.shape: {p.shape}")
                 x = QPFunction(verbose=False)(Q, p, A, b, e, e)
+                # print(train_model.parameters)
+                # for name, w in train_model.named_parameters():
+                #     if not "header" in name:
+                #         w.requires_grad = True
+                # x = diff(verbose=False)(Q, p, A, b, e, e)
                 # print(f"x: {x}")
                 # print(f"x.shape: {x.shape}")
                 w, b = x[:, :f_size], x[:, f_size]
                 # print(w, b)
                 # print(f"w.shape: {w.shape}")
                 # print(f"b.shape: {b.shape}")
-                new_weight = (1 - svm_lr) * train_model.state_dict()[self.param_weight_name] + svm_lr * w
-                new_bias = (1 - svm_lr) * train_model.state_dict()[self.param_bias_name] + svm_lr * b
+                # new_weight = (1 - (1 / (iter_step + 1))) * new_weight + (1 / (iter_step + 1)) * w
+                # new_bias = (1 - (1 / (iter_step + 1))) * new_bias + (1 / (iter_step + 1)) * b
+                new_weight = (1 - svm_lr) * new_weight + svm_lr * w
+                new_bias = (1 - svm_lr) * new_bias + svm_lr * b
+                iter_step += 1
+                # print(f"new_weight.requires_grad: {new_weight.requires_grad}")
+                # train_model.state_dict()[self.param_weight_name].copy_(w)
+                # train_model.state_dict()[self.param_bias_name].copy_(b)
+                
                 train_model.state_dict()[self.param_weight_name].copy_(new_weight)
                 train_model.state_dict()[self.param_bias_name].copy_(new_bias)
+                # for name, w in train_model.named_parameters():
+                #     if "header" in name:
+                #         w.requires_grad= False
                 
+                # optimizer.zero_grad()
+                # features = train_model.feature_extractor(images)
+                features1 = train_model.feature_extractor(images)
+                output =  features @ w.T + b
                 
-                optimizer.zero_grad()
-                log_probs = F.log_softmax(train_model(images), dim=1)
-                # loss = F.nll_loss(log_probs, labels)
-                loss = self.hinge_loss(train_model(images), labels)
+                log_probs = F.log_softmax(output, dim=1)
+                loss = F.nll_loss(log_probs, labels)
+                # loss = torch.norm(w)
+                loss.backward()
+                
+                # for n in train_model.state_dict():
+                #     print(train_model.state_dict()[n].grad)
+                # loss.backward()
+                self.hyper_optimizer.step()
+                # loss = self.hinge_loss(train_model(images), labels)
                 # loss.backward()
                 # optimizer.step()
                 pred = log_probs.data.max(1)[1]
                 incorrect += pred.ne(labels.data).cpu().sum()
+                # print(f"incorrect num: {incorrect}")
                 total += len(images)
                 err = 100.* incorrect / total
                 if self.config_dict['verbose'] and (batch_idx % 10 == 0):
-                    print('| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tacc:{:.2f}'.format(
+                    print('Train: | Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tacc:{:.2f}'.format(
                         epoch, iter_cnt, batch_idx * len(images),
                         len(self.trainloader.dataset),
                         100. * batch_idx / len(self.trainloader), loss.item(), 100 - err))
@@ -339,62 +336,6 @@ class BilevelFedDistManager(FedDistManager):
         # print(train_model.state_dict())
         
         # print(train_model.state_dict()[param_weight_name[0]])
-        # calculate hypergradient
-        for iter_cnt in range(self.config_dict['local_ep']):
-            batch_loss = []
-            incorrect, total = 0.0, 0.0
-            for batch_idx, (images, labels) in enumerate(self.trainloader):
-                images, labels = images.to(self.device), labels.to(self.device)
-                b_size = images.shape[0]
-                loss = sum([torch.norm(train_model.state_dict()[layer_weight_name], p=2) for layer_weight_name in self.param_weight_name])
-                labels_one_hot = 2 * torch.nn.functional.one_hot(labels) - 1
-                features = train_model.feature_extractor(images)
-                model_output = train_model.classifier(features)
-                C = 1
-                xi = torch.clamp(1 - labels_one_hot * model_output, min = 0)
-                print(f"xi.shape: {xi.shape}")
-                loss += C * torch.sum(torch.sum(xi, dim=1), dim=0)
-                
-                # print(f"A size: {A.shape}")
-                # A size: torch.Size([256, 10, 85])
-                weight = train_model.state_dict()[self.param_weight_name[0]]
-                bias = train_model.state_dict()[self.param_bias_name[0]]
-                temp = torch.cat((weight, bias.unsqueeze(1)), 1)
-                print(f"temp.shape: {temp.shape}")
-                temp = torch.sum(A * temp, dim=2) + xi
-                A = torch.ones(temp.shape).to(self.device) - temp
-                print(f"A.shape")
-                
-                # temp = A * train_model.state_dict()[param_weight_name[0]]
-                # print(temp.shape)
-                # temp = torch.eye(model_output.shape[1]).to(self.device).unsqueeze(0).repeat(b_size, 1, 1) # 10 classes
-                A = torch.cat((A, temp), 2)
-                # print(f"A size: {A.shape}")
-                # A size: torch.Size([256, 10, 95])
-                weight = train_model.state_dict()[self.param_weight_name[0]]
-                bias = train_model.state_dict()[self.param_bias_name[0]]
-                temp = torch.cat((torch.cat((weight, bias), 1).unsqueeze(0).repeat(b_size, 1, 1), xi), 2)
-                print(f"temp.shape: {temp.shape}")
-                optimizer.zero_grad()
-                log_probs = F.log_softmax(model_output, dim=1)
-                # loss = F.nll_loss(log_probs, labels)
-                loss = self.hinge_loss(model_output, labels)
-                loss.backward()
-                optimizer.step()
-                pred = log_probs.data.max(1)[1]
-                incorrect += pred.ne(labels.data).cpu().sum()
-                total += len(images)
-                err = 100.* incorrect / total
-                if self.config_dict['verbose'] and (batch_idx % 10 == 0):
-                    print('| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tacc:{:.2f}'.format(
-                        epoch, iter_cnt, batch_idx * len(images),
-                        len(self.trainloader.dataset),
-                        100. * batch_idx / len(self.trainloader), loss.item(), 100 - err))
-                self.logger.add_scalar('loss', loss.item())
-                batch_loss.append(loss.item())
-            self.trainF.write('{},{},{},{:.6f},{}\n'.format(epoch, iter_cnt, user_id, loss.data, err))
-            self.trainF.flush()
-            epoch_loss.append(sum(batch_loss)/len(batch_loss))
         correct = 0
         for batch_idx, (images, labels) in enumerate(self.testloader):
             images, labels = images.to(self.device), labels.to(self.device)
@@ -409,7 +350,10 @@ class BilevelFedDistManager(FedDistManager):
             pred_labels = pred_labels.view(-1)
             correct += torch.sum(torch.eq(pred_labels, labels), dim=0).item()
             total += len(labels)
+            
+            
         accuracy = correct/total
+        print(f"test acc: {accuracy}")
         self.valF.write('{},{},{},{}\n'.format(epoch, user_id, loss, 1 - accuracy))
         self.valF.flush()
         
@@ -525,6 +469,48 @@ class BilevelFedDistManager(FedDistManager):
         margins[range(batch_size), y] = 0
         loss = margins.mean()
         return loss
+    
+    def svm_matrix_gen(self, features, labels_one_hot):
+        b_size = features.shape[0] # 256     
+        f_size = features.shape[1] # 84
+        c_size = labels_one_hot.shape[1] # 10
+        Q_1 = torch.eye(f_size)
+        Q_2 = torch.zeros([1, 1])
+        Q_3 = torch.zeros([b_size, b_size])
+        Q_single = torch.block_diag(Q_1, Q_2, Q_3).to(self.device)
+        Q_single += 0.001 * torch.eye(f_size + 1 + b_size).to(self.device)
+        # print(Q_single)
+        Q = Q_single.repeat(c_size, 1, 1).double()
+        # print(f"Q.shape: {Q.shape}")
+        p_1 = torch.zeros([f_size+1]).to(self.device)
+        p_2 = 3 * torch.ones([b_size]).to(self.device)
+        p_single = torch.cat((p_1, p_2))
+        p = p_single.repeat(c_size, 1).double()
+        # print(f"p.shape: {p.shape}")
+        
+        
+        # construct matrix A
+        # one hot label
+        
+        # print(f"labels_one_hot.shape:{labels_one_hot.shape}")
+        b = torch.ones([b_size, 1]).to(self.device).double()
+        # print(f"features.shape[0]: {features.shape[0]}")
+        A = torch.cat((features, b), 1).unsqueeze(1).double()
+        A = (labels_one_hot.unsqueeze(2).double() @ A).permute(1, 0, 2)
+        b = torch.eye(b_size).repeat(c_size, 1, 1).to(self.device).double()
+        # b_1 = torch.zeros([c_size, b_size, 1]).to(self.device).double()
+        A = torch.cat((A, b), 2)
+        A_1 = torch.zeros([c_size, b_size, f_size+1]).to(self.device).double()
+        A_2 = torch.eye(b_size).repeat(c_size, 1, 1).to(self.device).double()
+        A_4 = torch.cat((A_1, A_2), 2)
+        A = -1 * torch.cat((A, A_4), 1)
+        # print(f"A: {A}")
+        b_1 = torch.ones([c_size, b_size]).to(self.device).double()
+        b_2 = torch.zeros([c_size, b_size]).to(self.device).double()
+        # print(f"b_1.shape: {b_1.shape}")
+        # print(f"b_2.shape: {b_2.shape}")
+        b = -1 * torch.cat((b_1, b_2), 1)
+        return Q, p, A, b
     
     def aug_lag(self, images, labels, train_model, param_lambda, param_rho, param_s):
         b_size = images.shape[0]
