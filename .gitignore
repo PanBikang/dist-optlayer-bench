@@ -4,3 +4,4 @@ slurm_result
 logs
 run.slurm
 *.pyc
+fig_draw

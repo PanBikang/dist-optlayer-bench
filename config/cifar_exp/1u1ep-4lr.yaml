@@ -1,0 +1,58 @@
+# batchsize
+batchSz: 1024
+
+# the place to save, default is None
+save: null
+
+# random seed, default is 1
+seed: 10
+
+# number of epoch, default is 1000
+nEpoch: 1000
+
+# weightDecay, default is 1e-4
+weightDecay: 1.e-4
+
+# optimizer, default is sgd
+opt: adam
+
+# dataset
+dataset: cifar-10
+
+# number of users
+num_users: 1
+
+# fraction of users for federal optimization
+frac: 1
+
+# whether the data is iid
+iid: True
+
+# local epoch
+local_ep: 1
+inEpoch: 1
+
+# hvp method
+hvp_method: global_batch
+
+# alter gradient method
+alt_method: False
+# neumann
+neumann: 1
+outer_tau: 1
+
+# hyper learning rate
+hpr_lr: 1.e-4
+hlr: 1.e-4
+
+# if False, no output of local update will be printed
+verbose: True
+
+model_name: cnn
+
+nHidden: 500
+# batch norm
+bn: False
+
+  
+

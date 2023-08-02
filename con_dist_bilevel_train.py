@@ -262,49 +262,14 @@ class BilevelFedDistManager(FedDistManager):
                 # loss = sum([torch.norm(train_model.state_dict()[layer_weight_name], p='fro') for layer_weight_name in self.param_weight_name])
                 Q, p , A, b = self.svm_matrix_gen(features, labels_one_hot)
                 e = Variable(torch.Tensor())
-                # print(f"A.shape: {A.shape}")
-                # print(f"b.shape: {b.shape}")
-                
-                # G = torch.zeros([c_size, 1, f_size + 1 + b_size + 1]).to(self.device).double()
-                # G[:,0,-1] = 1
-                # h = torch.zeros([c_size, 1]).to(self.device).double()
-                
-                # print(f"A.shape: {A.shape}")
-                # print(f"b.shape: {b.shape}")
-                # print(f"Q.shape: {Q.shape}")
-                # print(f"p.shape: {p.shape}")
                 x = QPFunction(verbose=False)(Q, p, A, b, e, e)
-                # print(train_model.parameters)
-                # for name, w in train_model.named_parameters():
-                #     if not "header" in name:
-                #         w.requires_grad = True
-                # x = diff(verbose=False)(Q, p, A, b, e, e)
-                # print(f"x: {x}")
-                # print(f"x.shape: {x.shape}")
                 w, b = x[:, :f_size], x[:, f_size]
-                # print(w, b)
-                # print(f"w.shape: {w.shape}")
-                # print(f"b.shape: {b.shape}")
                 new_weight = (1 - (1 / (iter_step + 1))) * new_weight + (1 / (iter_step + 1)) * w
                 new_bias = (1 - (1 / (iter_step + 1))) * new_bias + (1 / (iter_step + 1)) * b
-                # new_weight = (1 - svm_lr) * new_weight + svm_lr * w
-                # new_bias = (1 - svm_lr) * new_bias + svm_lr * b
                 iter_step += 1
-                # print(f"new_weight.requires_grad: {new_weight.requires_grad}")
-                # train_model.state_dict()[self.param_weight_name].copy_(w)
-                # train_model.state_dict()[self.param_bias_name].copy_(b)
-                
                 train_model.state_dict()[self.param_weight_name].copy_(new_weight)
                 train_model.state_dict()[self.param_bias_name].copy_(new_bias)
-                # for name, w in train_model.named_parameters():
-                #     if "header" in name:
-                #         w.requires_grad= False
-                
-                # optimizer.zero_grad()
-                # features = train_model.feature_extractor(images)
-                features1 = train_model.feature_extractor(images)
                 output =  features @ new_weight.T + new_bias
-                
                 log_probs = F.log_softmax(output, dim=1)
                 loss = F.nll_loss(log_probs, labels)
                 # loss = torch.norm(w)

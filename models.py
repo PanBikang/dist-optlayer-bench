@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch.autograd import Function, Variable
 from torch.nn.parameter import Parameter
 import torch.nn.functional as F
-from easyfl.models.model import BaseModel
+# from easyfl.models.model import BaseModel
 
 from qpth.qp import QPFunction, QPSolvers
 import copy
@@ -74,7 +74,31 @@ class CNNMnist(nn.Module):
     def classifier(self, x):
         return self.header(x)
     
+class CNNCifar(nn.Module):
+    def __init__(self, args):
+        super(CNNCifar, self).__init__()
+        self.conv1 = nn.Conv2d(3, 6, 5)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.fC1_outer = nn.Linear(16 * 5 * 5, 120)
+        self.fC2_outer = nn.Linear(120, 84)
+        self.header = nn.Linear(84, 10)
+
+    def forward(self, x):
+        x = self.feature_extractor(x)
+        x = self.classifier(x)
+        return x
     
+    def feature_extractor(self, x):
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = x.view(-1, 16 * 5 * 5)
+        x = F.relu(self.fC1_outer(x))
+        x = F.relu(self.fC2_outer(x))
+        return x
+    
+    def classifier(self, x):
+        return self.header(x)
     
 import numpy as np
 
@@ -98,54 +122,37 @@ class OnlineSVM:
                 self.w = (1 - self.learning_rate) * self.w
 
             
-class CNNMnist1(nn.Module):
-    '''
-        Inverse version of CNNMnist model
-    '''
-    def __init__(self,args):
-        super(CNNMnist1, self).__init__()
-        # 1 input image channel, 6 output channels, 5x5 square convolution
-        # kernel
-        self.header1 = nn.Conv2d(1, 6, 5, padding=2)
-        self.header2 = nn.Conv2d(6, 16, 5)
-        # an affine operation: y = Wx + b
-        self.fC1_outer = nn.Linear(16 * 5 * 5, 120)  # 5*5 from image dimension
-        self.fC1_outer1 = nn.Linear(120, 84)
-        self.fC1_outer2 = nn.Linear(84, 10)
-        # self.header2 = nn.Linear(120, 10)
+# class CNNMnist1(nn.Module):
+#     '''
+#         Inverse version of CNNMnist model
+#     '''
+#     def __init__(self,args):
+#         super(CNNMnist1, self).__init__()
+#         # 1 input image channel, 6 output channels, 5x5 square convolution
+#         # kernel
+#         self.header1 = nn.Conv2d(1, 6, 5, padding=2)
+#         self.header2 = nn.Conv2d(6, 16, 5)
+#         # an affine operation: y = Wx + b
+#         self.fC1_outer = nn.Linear(16 * 5 * 5, 120)  # 5*5 from image dimension
+#         self.fC1_outer1 = nn.Linear(120, 84)
+#         self.fC1_outer2 = nn.Linear(84, 10)
+#         # self.header2 = nn.Linear(120, 10)
 
-    def forward(self, x):
-        # Max pooling over a (2, 2) window
-        x = F.max_pool2d(F.relu(self.header1(x)), (2, 2))
-        # If the size is a square, you can specify with a single number
-        x = F.max_pool2d(F.relu(self.header2(x)), 2)
-        x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
-        # x = F.relu(self.fC1_outer(x))
-        x = self.fC1_outer(x)
-        # x = F.relu(self.fC1_outer1(x))
-        x = self.fC1_outer1(x)
-        x = self.fC1_outer2(x)
-        return x    
+#     def forward(self, x):
+#         # Max pooling over a (2, 2) window
+#         x = F.max_pool2d(F.relu(self.header1(x)), (2, 2))
+#         # If the size is a square, you can specify with a single number
+#         x = F.max_pool2d(F.relu(self.header2(x)), 2)
+#         x = torch.flatten(x, 1) # flatten all dimensions except the batch dimension
+#         # x = F.relu(self.fC1_outer(x))
+#         x = self.fC1_outer(x)
+#         # x = F.relu(self.fC1_outer1(x))
+#         x = self.fC1_outer1(x)
+#         x = self.fC1_outer2(x)
+#         return x    
 
 
-class CNNCifar(nn.Module):
-    def __init__(self, args):
-        super(CNNCifar, self).__init__()
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.fC1_outer = nn.Linear(16 * 5 * 5, 120)
-        self.fC2_outer = nn.Linear(120, 84)
-        self.header = nn.Linear(84, 10)
 
-    def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(-1, 16 * 5 * 5)
-        x = F.relu(self.fC1_outer(x))
-        x = F.relu(self.fC2_outer(x))
-        x = self.header(x)
-        return x
 
 from torch.autograd import Variable as V
 
