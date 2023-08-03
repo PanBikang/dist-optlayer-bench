@@ -256,20 +256,24 @@ class BilevelFedDistManager(FedDistManager):
                 self.hyper_optimizer.zero_grad()
                 # extract feature
                 features = train_model.feature_extractor(images)
-
-                f_size = features.shape[1]
-                # max-margin loss
-                # loss = sum([torch.norm(train_model.state_dict()[layer_weight_name], p='fro') for layer_weight_name in self.param_weight_name])
-                Q, p , A, b = self.svm_matrix_gen(features, labels_one_hot)
-                e = Variable(torch.Tensor())
-                x = QPFunction(verbose=False)(Q, p, A, b, e, e)
-                w, b = x[:, :f_size], x[:, f_size]
-                new_weight = (1 - (1 / (iter_step + 1))) * new_weight + (1 / (iter_step + 1)) * w
-                new_bias = (1 - (1 / (iter_step + 1))) * new_bias + (1 / (iter_step + 1)) * b
-                iter_step += 1
-                train_model.state_dict()[self.param_weight_name].copy_(new_weight)
-                train_model.state_dict()[self.param_bias_name].copy_(new_bias)
-                output =  features @ new_weight.T + new_bias
+                if self.config_dict.has_key('alt-bilevel'):
+                    if not self.config_dict['alt-bilevel']:
+                        # if not alt-bilevel, apply traditional GD
+                        output = train_model.classifier(features)
+                else:  
+                    f_size = features.shape[1]
+                    # max-margin loss
+                    # loss = sum([torch.norm(train_model.state_dict()[layer_weight_name], p='fro') for layer_weight_name in self.param_weight_name])
+                    Q, p , A, b = self.svm_matrix_gen(features, labels_one_hot)
+                    e = Variable(torch.Tensor())
+                    x = QPFunction(verbose=False)(Q, p, A, b, e, e)
+                    w, b = x[:, :f_size], x[:, f_size]
+                    new_weight = (1 - (1 / (iter_step + 1))) * new_weight + (1 / (iter_step + 1)) * w
+                    new_bias = (1 - (1 / (iter_step + 1))) * new_bias + (1 / (iter_step + 1)) * b
+                    iter_step += 1
+                    train_model.state_dict()[self.param_weight_name].copy_(new_weight)
+                    train_model.state_dict()[self.param_bias_name].copy_(new_bias)
+                    output =  features @ new_weight.T + new_bias
                 log_probs = F.log_softmax(output, dim=1)
                 loss = F.nll_loss(log_probs, labels)
                 # loss = torch.norm(w)
