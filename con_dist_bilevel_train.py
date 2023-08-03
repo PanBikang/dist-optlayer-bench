@@ -252,7 +252,7 @@ class BilevelFedDistManager(FedDistManager):
                 new_weight = train_model.state_dict()[self.param_weight_name].detach()
                 new_bias = train_model.state_dict()[self.param_bias_name].detach()
                 images, labels = images.to(self.device), labels.to(self.device)
-                labels_one_hot =  (2 * torch.nn.functional.one_hot(labels) - 1)
+                
                 self.hyper_optimizer.zero_grad()
                 # extract feature
                 features = train_model.feature_extractor(images)
@@ -261,6 +261,7 @@ class BilevelFedDistManager(FedDistManager):
                         # if not alt-bilevel, apply traditional GD
                         output = train_model.classifier(features)
                 else:  
+                    labels_one_hot =  (2 * torch.nn.functional.one_hot(labels) - 1)
                     f_size = features.shape[1]
                     # max-margin loss
                     # loss = sum([torch.norm(train_model.state_dict()[layer_weight_name], p='fro') for layer_weight_name in self.param_weight_name])
