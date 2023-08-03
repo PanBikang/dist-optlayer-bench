@@ -256,7 +256,7 @@ class BilevelFedDistManager(FedDistManager):
                 self.hyper_optimizer.zero_grad()
                 # extract feature
                 features = train_model.feature_extractor(images)
-                if self.config_dict.has_key('alt-bilevel'):
+                if 'alt-bilevel' in self.config_dict:
                     if not self.config_dict['alt-bilevel']:
                         # if not alt-bilevel, apply traditional GD
                         output = train_model.classifier(features)
