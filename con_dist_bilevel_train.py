@@ -256,10 +256,8 @@ class BilevelFedDistManager(FedDistManager):
                 self.hyper_optimizer.zero_grad()
                 # extract feature
                 features = train_model.feature_extractor(images)
-                if 'alt-bilevel' in self.config_dict:
-                    if not self.config_dict['alt-bilevel']:
-                        # if not alt-bilevel, apply traditional GD
-                        output = train_model.classifier(features)
+                if 'alt-bilevel' in self.config_dict and not self.config_dict['alt-bilevel']:
+                    output = train_model.classifier(features)
                 else:  
                     labels_one_hot =  (2 * torch.nn.functional.one_hot(labels) - 1)
                     f_size = features.shape[1]
@@ -267,7 +265,10 @@ class BilevelFedDistManager(FedDistManager):
                     # loss = sum([torch.norm(train_model.state_dict()[layer_weight_name], p='fro') for layer_weight_name in self.param_weight_name])
                     Q, p , A, b = self.svm_matrix_gen(features, labels_one_hot)
                     e = Variable(torch.Tensor())
-                    x = QPFunction(verbose=False)(Q, p, A, b, e, e)
+                    if 'alt-method' in self.config_dict and self.config_dict['alt-method']:
+                        x = diff(verbose=False)(Q, p, A, b, e, e)
+                    else:
+                        x = QPFunction(verbose=False)(Q, p, A, b, e, e)
                     w, b = x[:, :f_size], x[:, f_size]
                     new_weight = (1 - (1 / (iter_step + 1))) * new_weight + (1 / (iter_step + 1)) * w
                     new_bias = (1 - (1 / (iter_step + 1))) * new_bias + (1 / (iter_step + 1)) * b
