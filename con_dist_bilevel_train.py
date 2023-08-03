@@ -361,7 +361,7 @@ class BilevelFedDistManager(FedDistManager):
         if self.config_dict['hvp_method'] == 'global_batch':
             for i in range(self.config_dict['neumann']):
                 for cnt, client in enumerate(self.client_locals):
-                    p_client = self.hvp_iter(p, self.config_dict['hpr_lr'], cnt)
+                    p_client = self.hvp_iter(p, self.config_dict['hlr'], cnt)
                     p_locals.append(p_client)
                     self.hyper_iter_locals[cnt] += 1
                 p=self.aggregateP(p_locals)
@@ -369,7 +369,7 @@ class BilevelFedDistManager(FedDistManager):
             for cnt, client in enumerate(self.client_locals):
                 p_client=p.clone()
                 for i in range(self.config_dict['neumann']):
-                    p_client = self.hvp_iter(p_client, self.config_dict['hpr_lr'], cnt)
+                    p_client = self.hvp_iter(p_client, self.config_dict['hlr'], cnt)
                     self.hyper_iter_locals[cnt] += 1
                 p_locals.append(p_client)
             p=self.aggregateP(p_locals)

@@ -17,21 +17,19 @@ weightDecay: 1.e-4
 opt: adam
 
 # dataset
-dataset: mnist
+dataset: cifar-10
 
 # number of users
-num_users: 20
+num_users: 1
 
 # fraction of users for federal optimization
-frac: 0.1
+frac: 1
 
 # whether the data is iid
 iid: True
 
 # local epoch
-local_ep: 10
-
-# always 1
+local_ep: 1
 inEpoch: 1
 
 # hvp method
@@ -44,7 +42,7 @@ neumann: 1
 outer_tau: 1
 
 # hyper learning rate
-hlr: 1.e-4
+hlr: 1.e-3
 
 # if False, no output of local update will be printed
 verbose: True
